@@ -16,13 +16,13 @@ const DEFAULT_SHIFT_HOURS   = 12; // Padrão esperado: plantão de 12 horas
 /**
  * Verifica se dois turnos formam um emendado válido (sem descanso).
  */
-function isValidEmendado(prevShiftName, nextShiftName) {
+export function isValidEmendado(prevShiftName, nextShiftName) {
   return EMENDADO_PAIRS.some(
     ([a, b]) => a === prevShiftName && b === nextShiftName
   );
 }
 
-export async function generateSchedule({ month, year, overwriteLocked = false }) {
+export function generateSchedule({ month, year, overwriteLocked = false }) {
   const db = getDb();
 
   const employees = db.prepare('SELECT * FROM employees WHERE active = 1').all();
@@ -244,8 +244,8 @@ function checkMotoristaMinimums(db, employees, shiftTypes, dates, warnings) {
 
   const motoristIds = new Set(motoristas.map((e) => e.id));
 
-  const dayShiftNames  = new Set(['Manhã', 'Tarde']);
-  const nightShiftNames = new Set(['Noturno']);
+  const dayShiftNames   = new Set(['manhã', 'tarde']);
+  const nightShiftNames = new Set(['noturno']);
 
   for (const date of dates) {
     const entries = db.prepare(
@@ -257,8 +257,8 @@ function checkMotoristaMinimums(db, employees, shiftTypes, dates, warnings) {
 
     const motoristaEntries = entries.filter((e) => motoristIds.has(e.employee_id));
 
-    const dayCount   = motoristaEntries.filter((e) => dayShiftNames.has(e.shift_name)).length;
-    const nightCount = motoristaEntries.filter((e) => nightShiftNames.has(e.shift_name)).length;
+    const dayCount   = motoristaEntries.filter((e) => dayShiftNames.has(e.shift_name?.toLowerCase())).length;
+    const nightCount = motoristaEntries.filter((e) => nightShiftNames.has(e.shift_name?.toLowerCase())).length;
 
     if (dayCount < MIN_DAY_MOTORISTAS) {
       warnings.push({
@@ -303,16 +303,18 @@ function selectOffDays(freeDays, count) {
 }
 
 function computeShiftStart(date, shift) {
+  if (!shift.start_time || !/^\d{1,2}:\d{2}$/.test(shift.start_time)) return null;
   const [h, m] = shift.start_time.split(':').map(Number);
   return new Date(`${date}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
 }
 
 function computeShiftEnd(date, shift) {
   const start = computeShiftStart(date, shift);
+  if (!start) return null;
   return new Date(start.getTime() + shift.duration_hours * 60 * 60 * 1000);
 }
 
-function correctHours(entries, shiftTypes, shiftMap, currentHours, target) {
+export function correctHours(entries, shiftTypes, shiftMap, currentHours, target) {
   const diff = currentHours - target;
   if (Math.abs(diff) <= 6) return entries;
 
