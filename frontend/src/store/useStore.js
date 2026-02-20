@@ -51,12 +51,23 @@ const useStore = create((set, get) => ({
     }
   },
 
+  createShiftType: async (data) => {
+    const created = await shiftTypesApi.create(data);
+    set((state) => ({ shiftTypes: [...state.shiftTypes, created] }));
+    return created;
+  },
+
   updateShiftType: async (id, data) => {
     const updated = await shiftTypesApi.update(id, data);
     set((state) => ({
       shiftTypes: state.shiftTypes.map((s) => (s.id === id ? updated : s)),
     }));
     return updated;
+  },
+
+  deleteShiftType: async (id) => {
+    await shiftTypesApi.delete(id);
+    set((state) => ({ shiftTypes: state.shiftTypes.filter((s) => s.id !== id) }));
   },
 
   // ── Schedule ───────────────────────────────────────────────

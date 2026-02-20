@@ -17,7 +17,9 @@ export const employeesApi = {
 // Shift types
 export const shiftTypesApi = {
   list: () => client.get('/shift-types').then((r) => r.data),
+  create: (data) => client.post('/shift-types', data).then((r) => r.data),
   update: (id, data) => client.put(`/shift-types/${id}`, data).then((r) => r.data),
+  delete: (id) => client.delete(`/shift-types/${id}`).then((r) => r.data),
 };
 
 // Schedules
