@@ -5,13 +5,19 @@ import { dirname, join } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const DB_PATH = join(__dirname, '..', '..', 'escala.db');
+const DB_PATH = process.env.DB_PATH || join(__dirname, '..', '..', 'escala.db');
 
 let db;
 
+/** Resets the singleton — use only in tests to get a fresh DB. */
+export function resetDb() {
+  if (db) { try { db.close(); } catch {} }
+  db = undefined;
+}
+
 export function getDb() {
   if (!db) {
-    db = new DatabaseSync(DB_PATH);
+    db = new DatabaseSync(process.env.DB_PATH || DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA foreign_keys = ON');
     initSchema();
