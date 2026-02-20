@@ -144,20 +144,22 @@ describe('Regra 5 — mínimo de motoristas por período', () => {
     expect(motoristaWarnings.length).toBeGreaterThan(0);
   });
 
-  it('não gera warning de motoristas quando há funcionários suficientes', async () => {
+  it('gera menos warnings noturnos com mais motoristas disponíveis', async () => {
     const db = freshDb();
-    // 4 motoristas diurnos + 2 noturnos (6 no total)
+    // 6 motoristas — acima do mínimo noturno (2) e diurno (4)
     for (let i = 0; i < 6; i++) {
       createEmployee(db, { name: `Motorista ${i}`, cargo: 'Motorista', setor: 'Transporte' });
     }
 
     const res = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
-    const motoristaWarnings = res.body.warnings.filter(
-      (w) => w.type === 'motorista_dia' || w.type === 'motorista_noite'
-    );
-    // Com 6 motoristas e escala distribuída pode ainda ter dias insuficientes
-    // mas o aviso deve diminuir drasticamente
     expect(res.body.success).toBe(true);
+
+    // Verifica que checkMotoristaMinimums está ativa: com 6 motoristas todos no Noturno
+    // (turno padrão de 12h), haverá warnings noturnos nos dias em que a folga obrigatória
+    // coincide para múltiplos motoristas — mas bem menos do que com 1 motorista (31 warnings).
+    const nightWarnings = res.body.warnings.filter((w) => w.type === 'motorista_noite');
+    expect(nightWarnings.length).toBeGreaterThan(0); // regra ativa: warnings ainda detectados
+    expect(nightWarnings.length).toBeLessThan(31);   // mas melhor cobertura que caso crítico (1 motorista)
   });
 });
