@@ -54,17 +54,27 @@ router.get('/', (req, res) => {
 });
 
 // POST /api/schedules/generate
-router.post('/generate', async (req, res) => {
+router.post('/generate', (req, res) => {
   const { month, year, overwriteLocked = false } = req.body;
 
   if (!month || !year) {
     return res.status(400).json({ error: 'month and year are required' });
   }
 
+  const m = parseInt(month);
+  const y = parseInt(year);
+
+  if (isNaN(m) || m < 1 || m > 12) {
+    return res.status(400).json({ error: 'month must be between 1 and 12' });
+  }
+  if (isNaN(y) || y < 2000 || y > 2100) {
+    return res.status(400).json({ error: 'year must be between 2000 and 2100' });
+  }
+
   try {
-    const result = await generateSchedule({
-      month: parseInt(month),
-      year: parseInt(year),
+    const result = generateSchedule({
+      month: m,
+      year: y,
       overwriteLocked,
     });
     res.json({ success: true, ...result });
