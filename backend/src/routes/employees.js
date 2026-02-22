@@ -3,6 +3,12 @@ import { getDb, runTransaction } from '../db/database.js';
 
 const router = Router();
 
+const SETORES_VALIDOS = [
+  'Transporte Ambulância',
+  'Transporte Hemodiálise',
+  'Transporte Administrativo',
+];
+
 // GET /api/employees
 router.get('/', (req, res) => {
   const db = getDb();
@@ -36,16 +42,20 @@ router.get('/:id', (req, res) => {
 // POST /api/employees
 router.post('/', (req, res) => {
   const db = getDb();
-  const { name, cargo, setor, restRules } = req.body;
+  const { name, setor, restRules } = req.body;
 
-  if (!name || !cargo || !setor) {
-    return res.status(400).json({ error: 'name, cargo, and setor are required' });
+  if (!name || !setor) {
+    return res.status(400).json({ error: 'name and setor are required' });
+  }
+
+  if (!SETORES_VALIDOS.includes(setor)) {
+    return res.status(400).json({ error: 'Setor inválido.' });
   }
 
   const employee = runTransaction(() => {
     const result = db
       .prepare('INSERT INTO employees (name, cargo, setor) VALUES (?, ?, ?)')
-      .run(name.trim(), cargo.trim(), setor.trim());
+      .run(name.trim(), 'Motorista', setor.trim());
 
     const employeeId = result.lastInsertRowid;
 
@@ -54,7 +64,7 @@ router.post('/', (req, res) => {
        VALUES (?, ?, ?, ?, ?)`
     ).run(
       employeeId,
-      restRules?.min_rest_hours ?? 11,
+      24,
       restRules?.days_off_per_week ?? 1,
       restRules?.preferred_shift_id ?? null,
       restRules?.notes ?? null
@@ -72,16 +82,21 @@ router.post('/', (req, res) => {
 // PUT /api/employees/:id
 router.put('/:id', (req, res) => {
   const db = getDb();
-  const { name, cargo, setor, active, restRules } = req.body;
+  const { name, setor, active, restRules } = req.body;
   const id = parseInt(req.params.id);
 
   const employee = db.prepare('SELECT id FROM employees WHERE id = ?').get(id);
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
+  if (setor !== undefined && !SETORES_VALIDOS.includes(setor)) {
+    return res.status(400).json({ error: 'Setor inválido.' });
+  }
+
   runTransaction(() => {
     // Update each field only if provided
     if (name !== undefined) db.prepare("UPDATE employees SET name = ?, updated_at = datetime('now') WHERE id = ?").run(name, id);
-    if (cargo !== undefined) db.prepare("UPDATE employees SET cargo = ?, updated_at = datetime('now') WHERE id = ?").run(cargo, id);
+    // cargo is always Motorista — always enforce it
+    db.prepare("UPDATE employees SET cargo = 'Motorista', updated_at = datetime('now') WHERE id = ?").run(id);
     if (setor !== undefined) db.prepare("UPDATE employees SET setor = ?, updated_at = datetime('now') WHERE id = ?").run(setor, id);
     if (active !== undefined) db.prepare("UPDATE employees SET active = ?, updated_at = datetime('now') WHERE id = ?").run(active ? 1 : 0, id);
 
@@ -90,8 +105,7 @@ router.put('/:id', (req, res) => {
         .prepare('SELECT id FROM employee_rest_rules WHERE employee_id = ?')
         .get(id);
       if (existing) {
-        if (restRules.min_rest_hours !== undefined)
-          db.prepare('UPDATE employee_rest_rules SET min_rest_hours = ? WHERE employee_id = ?').run(restRules.min_rest_hours, id);
+        // min_rest_hours is always 24 — never update from payload
         if (restRules.days_off_per_week !== undefined)
           db.prepare('UPDATE employee_rest_rules SET days_off_per_week = ? WHERE employee_id = ?').run(restRules.days_off_per_week, id);
         if (restRules.preferred_shift_id !== undefined)
@@ -104,7 +118,7 @@ router.put('/:id', (req, res) => {
            VALUES (?, ?, ?, ?, ?)`
         ).run(
           id,
-          restRules.min_rest_hours ?? 11,
+          24,
           restRules.days_off_per_week ?? 1,
           restRules.preferred_shift_id ?? null,
           restRules.notes ?? null
