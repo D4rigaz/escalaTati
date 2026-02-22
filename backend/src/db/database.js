@@ -9,12 +9,6 @@ const DB_PATH = process.env.DB_PATH || join(__dirname, '..', '..', 'escala.db');
 
 let db;
 
-/** Reseta o singleton — use apenas em testes para obter um DB limpo. */
-export function resetDb() {
-  if (db) { try { db.close(); } catch {} }
-  db = undefined;
-}
-
 export function getDb() {
   if (!db) {
     db = new DatabaseSync(process.env.DB_PATH || DB_PATH);
@@ -119,15 +113,17 @@ function seedShiftTypes() {
 }
 
 function migrateShiftTimes() {
-  db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
-    .run('07:00', '13:00', 'Manhã');
-  db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
-    .run('13:00', '19:00', 'Tarde');
-  db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
-    .run('19:00', '07:00', 'Noturno');
-  db.prepare(
-    "INSERT OR IGNORE INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?,?,?,?,?)"
-  ).run('Administrativo', '07:00', '17:00', 10, '#10B981');
+  runTransaction(() => {
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
+      .run('07:00', '13:00', 'Manhã');
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
+      .run('13:00', '19:00', 'Tarde');
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
+      .run('19:00', '07:00', 'Noturno');
+    db.prepare(
+      "INSERT OR IGNORE INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?,?,?,?,?)"
+    ).run('Administrativo', '07:00', '17:00', 10, '#10B981');
+  });
 }
 
 export default getDb;
