@@ -9,12 +9,6 @@ const DB_PATH = process.env.DB_PATH || join(__dirname, '..', '..', 'escala.db');
 
 let db;
 
-/** Reseta o singleton — use apenas em testes para obter um DB limpo. */
-export function resetDb() {
-  if (db) { try { db.close(); } catch {} }
-  db = undefined;
-}
-
 export function getDb() {
   if (!db) {
     db = new DatabaseSync(process.env.DB_PATH || DB_PATH);
@@ -22,8 +16,15 @@ export function getDb() {
     db.exec('PRAGMA foreign_keys = ON');
     initSchema();
     seedShiftTypes();
+    migrateShiftTimes();
   }
   return db;
+}
+
+/** Reseta o singleton — use apenas em testes para obter um DB limpo. */
+export function resetDb() {
+  if (db) { try { db.close(); } catch {} }
+  db = undefined;
 }
 
 /** Run a function inside a transaction; rolls back on error. */
@@ -98,13 +99,30 @@ function seedShiftTypes() {
   runTransaction(() => {
     db.prepare(
       'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
-    ).run('Manhã', '06:00', '12:00', 6, '#FCD34D');
+    ).run('Manhã', '07:00', '13:00', 6, '#FCD34D');
     db.prepare(
       'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
-    ).run('Tarde', '12:00', '18:00', 6, '#60A5FA');
+    ).run('Tarde', '13:00', '19:00', 6, '#60A5FA');
     db.prepare(
       'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
-    ).run('Noturno', '18:00', '06:00', 12, '#818CF8');
+    ).run('Noturno', '19:00', '07:00', 12, '#818CF8');
+    db.prepare(
+      'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
+    ).run('Administrativo', '07:00', '17:00', 10, '#10B981');
+  });
+}
+
+function migrateShiftTimes() {
+  runTransaction(() => {
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
+      .run('07:00', '13:00', 'Manhã');
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
+      .run('13:00', '19:00', 'Tarde');
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=? WHERE name=?")
+      .run('19:00', '07:00', 'Noturno');
+    db.prepare(
+      "INSERT OR IGNORE INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?,?,?,?,?)"
+    ).run('Administrativo', '07:00', '17:00', 10, '#10B981');
   });
 }
 

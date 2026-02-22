@@ -4,6 +4,12 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import useStore from '../../store/useStore.js';
 
+const SETORES = [
+  'Transporte Ambulância',
+  'Transporte Hemodiálise',
+  'Transporte Administrativo',
+];
+
 export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }) {
   const { shiftTypes, createEmployee, updateEmployee, addToast } = useStore();
 
@@ -16,15 +22,13 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
     defaultValues: employee
       ? {
           name: employee.name,
-          cargo: employee.cargo,
           setor: employee.setor,
-          min_rest_hours: employee.restRules?.min_rest_hours ?? 11,
           days_off_per_week: employee.restRules?.days_off_per_week ?? 1,
           preferred_shift_id: employee.restRules?.preferred_shift_id ?? '',
           notes: employee.restRules?.notes ?? '',
         }
       : {
-          min_rest_hours: 11,
+          setor: '',
           days_off_per_week: 1,
           preferred_shift_id: '',
           notes: '',
@@ -37,14 +41,12 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
         employee
           ? {
               name: employee.name,
-              cargo: employee.cargo,
               setor: employee.setor,
-              min_rest_hours: employee.restRules?.min_rest_hours ?? 11,
               days_off_per_week: employee.restRules?.days_off_per_week ?? 1,
               preferred_shift_id: employee.restRules?.preferred_shift_id ?? '',
               notes: employee.restRules?.notes ?? '',
             }
-          : { min_rest_hours: 11, days_off_per_week: 1, preferred_shift_id: '', notes: '' }
+          : { setor: '', days_off_per_week: 1, preferred_shift_id: '', notes: '' }
       );
     }
   }, [open, employee]);
@@ -53,10 +55,9 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
     try {
       const payload = {
         name: data.name,
-        cargo: data.cargo,
+        cargo: 'Motorista',
         setor: data.setor,
         restRules: {
-          min_rest_hours: parseInt(data.min_rest_hours),
           days_off_per_week: parseInt(data.days_off_per_week),
           preferred_shift_id: data.preferred_shift_id ? parseInt(data.preferred_shift_id) : null,
           notes: data.notes || null,
@@ -107,23 +108,22 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="label">Cargo *</label>
-                <input
-                  className="input"
-                  {...register('cargo', { required: 'Cargo é obrigatório' })}
-                  placeholder="Ex: Operador"
-                />
-                {errors.cargo && (
-                  <p className="text-xs text-red-500 mt-1">{errors.cargo.message}</p>
-                )}
+                <label className="label">Cargo</label>
+                <p className="text-sm text-gray-500 mt-1 px-1">
+                  <strong>Motorista</strong>
+                </p>
               </div>
               <div>
                 <label className="label">Setor *</label>
-                <input
+                <select
                   className="input"
                   {...register('setor', { required: 'Setor é obrigatório' })}
-                  placeholder="Ex: Produção"
-                />
+                >
+                  <option value="">Selecione o setor</option>
+                  {SETORES.map((s) => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
                 {errors.setor && (
                   <p className="text-xs text-red-500 mt-1">{errors.setor.message}</p>
                 )}
@@ -135,14 +135,10 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
               <p className="text-sm font-semibold text-gray-700 mb-3">Regras de Descanso</p>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label">Descanso mínimo (h)</label>
-                  <input
-                    type="number"
-                    className="input"
-                    min="8"
-                    max="24"
-                    {...register('min_rest_hours', { min: 8, max: 24 })}
-                  />
+                  <label className="label">Descanso mínimo</label>
+                  <p className="text-sm text-gray-500 mt-1 px-1">
+                    <strong>24h</strong> (fixo)
+                  </p>
                 </div>
                 <div>
                   <label className="label">Folgas por semana</label>
