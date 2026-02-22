@@ -4,7 +4,7 @@ import { isValidEmendado, correctHours } from '../services/scheduleGenerator.js'
 describe('isValidEmendado', () => {
   it('permite Tarde → Noturno', () => expect(isValidEmendado('Tarde', 'Noturno')).toBe(true));
   it('permite Noturno → Manhã', () => expect(isValidEmendado('Noturno', 'Manhã')).toBe(true));
-  it('bloqueia Manhã → Tarde', () => expect(isValidEmendado('Manhã', 'Tarde')).toBe(false));
+  it('permite Manhã → Tarde (emendado diurno, regra 11)', () => expect(isValidEmendado('Manhã', 'Tarde')).toBe(true));
   it('bloqueia Noturno → Noturno', () => expect(isValidEmendado('Noturno', 'Noturno')).toBe(false));
   it('bloqueia Tarde → Manhã', () => expect(isValidEmendado('Tarde', 'Manhã')).toBe(false));
   it('retorna false para valores nulos', () => expect(isValidEmendado(null, 'Noturno')).toBe(false));

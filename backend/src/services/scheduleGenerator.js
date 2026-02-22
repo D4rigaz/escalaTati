@@ -105,6 +105,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   let lastShiftName = null;
   let consecutiveHours = 0;
   const entries = [];
+  const weeklyOffDates = new Set(); // dias de folga planejados (mínimo semanal)
 
   // Count locked hours
   for (const entry of lockedEntries) {
@@ -163,6 +164,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       }
 
       for (const date of selectedOff) {
+        weeklyOffDates.add(date);
         entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0 });
         consecutiveHours = 0;
         lastShiftName = null;
@@ -216,6 +218,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       }
 
       for (const date of selectedOff) {
+        weeklyOffDates.add(date);
         entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0 });
         consecutiveHours = 0;
         lastShiftName = null;
@@ -223,8 +226,9 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     }
   }
 
-  // Correction step — passa preferredShift para garantir turno correto por setor
-  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift);
+  // Correction step — passa preferredShift e weeklyOffDates para garantir turno correto por setor
+  // e preservar folgas semanais obrigatórias (regra 6)
+  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, weeklyOffDates);
 
   // Persist
   const insertEntry = db.prepare(
@@ -380,7 +384,7 @@ function computeShiftEnd(date, shift) {
   return new Date(start.getTime() + shift.duration_hours * 60 * 60 * 1000);
 }
 
-export function correctHours(entries, shiftTypes, shiftMap, currentHours, target, preferredShift = null) {
+export function correctHours(entries, shiftTypes, shiftMap, currentHours, target, preferredShift = null, lockedOffDates = new Set()) {
   const diff = currentHours - target;
   if (Math.abs(diff) <= 6) return entries;
 
@@ -402,6 +406,7 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
   } else if (diff < -6) {
     // Too few hours: convert off days to the sector's preferred shift
     // (preferredShift garante que ADM recebe turno de 10h, não 12h)
+    // Preserva folgas semanais obrigatórias (lockedOffDates) — regra 6
     const shiftToAdd =
       preferredShift ||
       shiftTypes.find((s) => s.duration_hours === DEFAULT_SHIFT_HOURS) ||
@@ -409,6 +414,7 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
     let deficit = Math.abs(diff);
     for (const entry of offEntries) {
       if (deficit <= 0) break;
+      if (lockedOffDates.has(entry.date)) continue; // preserva folga semanal obrigatória
       entry.is_day_off = 0;
       entry.shift_type_id = shiftToAdd.id;
       deficit -= shiftToAdd.duration_hours;

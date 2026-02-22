@@ -54,7 +54,7 @@ router.get('/', (req, res) => {
 });
 
 // POST /api/schedules/generate
-router.post('/generate', (req, res) => {
+router.post('/generate', async (req, res) => {
   const { month, year, overwriteLocked = false } = req.body;
 
   if (!month || !year) {
@@ -72,7 +72,7 @@ router.post('/generate', (req, res) => {
   }
 
   try {
-    const result = generateSchedule({
+    const result = await generateSchedule({
       month: m,
       year: y,
       overwriteLocked,
