@@ -68,30 +68,39 @@ describe('POST /api/employees', () => {
     freshDb();
     const res = await request(app)
       .post('/api/employees')
-      .send({ name: 'Diana', cargo: 'Médica', setor: 'UTI' });
+      .send({ name: 'Diana', setor: 'Transporte Ambulância' });
 
     expect(res.status).toBe(201);
     expect(res.body.name).toBe('Diana');
-    expect(res.body.cargo).toBe('Médica');
+    expect(res.body.cargo).toBe('Motorista'); // cargo é sempre Motorista (regra 1)
     expect(res.body.active).toBe(1);
     expect(res.body.restRules).toBeTruthy();
   });
 
   it('retorna 400 quando faltam campos obrigatórios', async () => {
     freshDb();
-    const res = await request(app).post('/api/employees').send({ name: 'Sem cargo' });
+    const res = await request(app).post('/api/employees').send({ name: 'Sem setor' });
     expect(res.status).toBe(400);
     expect(res.body.error).toBeTruthy();
   });
 
-  it('aplica regras de descanso customizadas', async () => {
+  it('retorna 400 para setor inválido', async () => {
     freshDb();
     const res = await request(app)
       .post('/api/employees')
-      .send({ name: 'Eduardo', cargo: 'Enfermeiro', setor: 'PS', restRules: { min_rest_hours: 12, days_off_per_week: 2 } });
+      .send({ name: 'Fora do domínio', setor: 'UTI' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/setor/i);
+  });
+
+  it('aplica days_off_per_week customizado', async () => {
+    freshDb();
+    const res = await request(app)
+      .post('/api/employees')
+      .send({ name: 'Eduardo', setor: 'Transporte Hemodiálise', restRules: { days_off_per_week: 2 } });
 
     expect(res.status).toBe(201);
-    expect(res.body.restRules.min_rest_hours).toBe(12);
+    expect(res.body.restRules.min_rest_hours).toBe(24); // fixo em 24h (regra 10)
     expect(res.body.restRules.days_off_per_week).toBe(2);
   });
 });
