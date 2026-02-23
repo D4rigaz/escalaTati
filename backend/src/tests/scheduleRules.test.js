@@ -63,35 +63,30 @@ describe('Regra 2 — proibido 24h consecutivas', () => {
   });
 });
 
-// ─── Regra 3: Folga de 24h mínima semanal ───────────────────────────────────
+// ─── Regra 3 (Regra 13 nova): descanso gerenciado pelo MIN_REST_HOURS ────────
+// days_off_per_week foi removido — o descanso é garantido apenas pela regra
+// de 24h mínimas entre turnos (regra 10). Não há mais folga semanal forçada.
 
-describe('Regra 3 — mínimo 1 folga por semana', () => {
-  it('todo funcionário tem ao menos 1 folga por semana', async () => {
+describe('Regra 13 — sem days_off_per_week, total de horas próximo de 160h', () => {
+  it('a escala não tem campo days_off_per_week nas rest_rules', async () => {
+    const db = freshDb();
+    createEmployee(db, { name: 'Carla' });
+
+    const res = await request(app).get('/api/employees');
+    expect(res.status).toBe(200);
+    expect(res.body[0].restRules).toBeDefined();
+    expect(res.body[0].restRules.days_off_per_week).toBeUndefined();
+  });
+
+  it('total de horas mensal fica próximo de 160h (desvio ≤ 12h)', async () => {
     const db = freshDb();
     createEmployee(db, { name: 'Carla' });
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
     const schedule = await request(app).get('/api/schedules?month=1&year=2025');
-    const entries = schedule.body.entries;
-
-    // Agrupa por semana (domingo-sábado)
-    const byDate = {};
-    for (const e of entries) byDate[e.date] = e;
-
-    // Janeiro 2025: 5 semanas
-    const weeks = [
-      ['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
-      ['2025-01-05', '2025-01-06', '2025-01-07', '2025-01-08', '2025-01-09', '2025-01-10', '2025-01-11'],
-      ['2025-01-12', '2025-01-13', '2025-01-14', '2025-01-15', '2025-01-16', '2025-01-17', '2025-01-18'],
-      ['2025-01-19', '2025-01-20', '2025-01-21', '2025-01-22', '2025-01-23', '2025-01-24', '2025-01-25'],
-      ['2025-01-26', '2025-01-27', '2025-01-28', '2025-01-29', '2025-01-30', '2025-01-31'],
-    ];
-
-    for (const week of weeks) {
-      const daysOff = week.filter((d) => byDate[d]?.is_day_off === 1 || !byDate[d]);
-      expect(daysOff.length).toBeGreaterThanOrEqual(1);
-    }
+    const total = schedule.body.totals[0]?.total_hours ?? 0;
+    expect(Math.abs(total - 160)).toBeLessThanOrEqual(12);
   });
 });
 
@@ -123,43 +118,54 @@ describe('Regra 4 — emendado Tarde→Noturno e Noturno→Manhã são permitido
   });
 });
 
-// ─── Regra 5: Mínimo de motoristas ──────────────────────────────────────────
+// ─── Regra 5 (atualizada): Cobertura mínima por setor e período ──────────────
 
-describe('Regra 5 — mínimo de motoristas por período', () => {
-  it('gera warning quando não há motoristas suficientes no período diurno', async () => {
+describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
+  it('gera warnings de cobertura Diurno quando não há motoristas Hemodiálise suficientes', async () => {
     const db = freshDb();
-    // Somente 1 motorista (precisa de 4 durante o dia)
-    createEmployee(db, { name: 'Eduardo', cargo: 'Motorista', setor: 'Transporte' });
-    // Resto não são motoristas
-    createEmployee(db, { name: 'Fernanda', cargo: 'Técnica', setor: 'TI' });
+    // Somente 1 motorista de Ambulância — sem Hemodiálise
+    createEmployee(db, { name: 'Eduardo', setor: 'Transporte Ambulância' });
 
     const res = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
 
-    const motoristaWarnings = res.body.warnings.filter(
-      (w) => w.type === 'motorista_dia' || w.type === 'motorista_noite'
+    const coverageWarnings = res.body.warnings.filter(
+      (w) => w.type === 'diurno_hemo' || w.type === 'diurno_ambul' || w.type === 'noturno_ambul'
     );
-    expect(motoristaWarnings.length).toBeGreaterThan(0);
+    expect(coverageWarnings.length).toBeGreaterThan(0);
   });
 
-  it('gera menos warnings noturnos com mais motoristas disponíveis', async () => {
-    const db = freshDb();
-    // 6 motoristas — acima do mínimo noturno (2) e diurno (4)
+  it('com 6 motoristas de Ambulância gera menos warnings noturnos que com 1 motorista', async () => {
+    // Cenário A: 6 motoristas
+    const db6 = freshDb();
     for (let i = 0; i < 6; i++) {
-      createEmployee(db, { name: `Motorista ${i}`, cargo: 'Motorista', setor: 'Transporte' });
+      createEmployee(db6, { name: `Motorista ${i}`, setor: 'Transporte Ambulância' });
     }
+    const res6 = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+    expect(res6.body.success).toBe(true);
+    const nightWarnings6 = res6.body.warnings.filter((w) => w.type === 'noturno_ambul');
+
+    // Cenário B: 1 motorista (linha base para comparação)
+    const dbSolo = freshDb();
+    createEmployee(dbSolo, { name: 'Solo', setor: 'Transporte Ambulância' });
+    const resSolo = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+    const nightWarningsSolo = resSolo.body.warnings.filter((w) => w.type === 'noturno_ambul');
+
+    // 6 motoristas devem produzir ≤ warnings do que 1 motorista
+    expect(nightWarnings6.length).toBeLessThanOrEqual(nightWarningsSolo.length);
+  });
+
+  it('com 1 motorista de Ambulância gera warnings noturnos em vários dias', async () => {
+    const db = freshDb();
+    createEmployee(db, { name: 'Solo', setor: 'Transporte Ambulância' });
 
     const res = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
     expect(res.body.success).toBe(true);
-
-    // Verifica que checkMotoristaMinimums está ativa: com 6 motoristas todos no Noturno
-    // (turno padrão de 12h), haverá warnings noturnos nos dias em que a folga obrigatória
-    // coincide para múltiplos motoristas — mas bem menos do que com 1 motorista (31 warnings).
-    const nightWarnings = res.body.warnings.filter((w) => w.type === 'motorista_noite');
-    expect(nightWarnings.length).toBeGreaterThan(0); // regra ativa: warnings ainda detectados
-    expect(nightWarnings.length).toBeLessThan(31);   // mas melhor cobertura que caso crítico (1 motorista)
+    const nightWarnings = res.body.warnings.filter((w) => w.type === 'noturno_ambul');
+    // 1 motorista não consegue cobrir todos os dias que exigem ≥2 Ambulância
+    expect(nightWarnings.length).toBeGreaterThan(0);
   });
 });

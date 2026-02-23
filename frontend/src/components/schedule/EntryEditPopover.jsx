@@ -1,16 +1,17 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { X, Lock, Unlock } from 'lucide-react';
+import { X, Lock } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import useStore from '../../store/useStore.js';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 export default function EntryEditPopover({ open, onOpenChange, entry }) {
-  const { shiftTypes, updateScheduleEntry, addToast } = useStore();
+  const { shiftTypes, employees, updateScheduleEntry, addToast } = useStore();
   const [shiftTypeId, setShiftTypeId] = useState('');
   const [isDayOff, setIsDayOff] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [notes, setNotes] = useState('');
+  const [setorOverride, setSetorOverride] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -19,10 +20,15 @@ export default function EntryEditPopover({ open, onOpenChange, entry }) {
       setIsDayOff(Boolean(entry.is_day_off));
       setIsLocked(Boolean(entry.is_locked));
       setNotes(entry.notes || '');
+      setSetorOverride(entry.setor_override || '');
     }
   }, [entry]);
 
   if (!entry) return null;
+
+  // Look up the employee's setores from the store
+  const employee = employees.find((e) => e.id === entry.employee_id);
+  const employeeSetores = employee?.setores || [];
 
   const dateFormatted = format(parseISO(entry.date), "EEEE, d 'de' MMMM", { locale: ptBR });
 
@@ -34,6 +40,7 @@ export default function EntryEditPopover({ open, onOpenChange, entry }) {
         is_day_off: isDayOff ? 1 : 0,
         is_locked: 1, // always lock after manual edit
         notes: notes || null,
+        setor_override: !isDayOff && setorOverride ? setorOverride : null,
       });
       addToast({ type: 'success', title: 'Entrada atualizada', message: `${entry.employee_name} — ${entry.date}` });
       onOpenChange(false);
@@ -94,6 +101,23 @@ export default function EntryEditPopover({ open, onOpenChange, entry }) {
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.start_time}–{s.end_time}, {s.duration_hours}h)
                     </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Setor override — only when not day-off and employee has multiple setores */}
+            {!isDayOff && employeeSetores.length > 1 && (
+              <div>
+                <label className="label">Setor neste dia</label>
+                <select
+                  className="input"
+                  value={setorOverride}
+                  onChange={(e) => setSetorOverride(e.target.value)}
+                >
+                  <option value="">Padrão (sem override)</option>
+                  {employeeSetores.map((s) => (
+                    <option key={s} value={s}>{s}</option>
                   ))}
                 </select>
               </div>

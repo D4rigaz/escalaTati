@@ -116,6 +116,7 @@ export async function exportExcel(month, year) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
       }
       cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      // Base border
       cell.border = {
         top: { style: 'thin', color: { argb: 'FFD1D5DB' } },
         left: { style: 'thin', color: { argb: 'FFD1D5DB' } },
@@ -125,6 +126,14 @@ export async function exportExcel(month, year) {
       if (colNumber === 1) {
         cell.alignment = { horizontal: 'left', vertical: 'middle' };
         cell.font = { size: 10 };
+        // Color stripe on left border for employee identification
+        if (employee.color) {
+          const empArgb = 'FF' + employee.color.replace('#', '');
+          cell.border = {
+            ...cell.border,
+            left: { style: 'medium', color: { argb: empArgb } },
+          };
+        }
       }
       if (colNumber === 2) {
         const isOk = Math.abs(totalHours - 160) <= 12;

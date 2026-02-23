@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { employeesApi, shiftTypesApi, schedulesApi } from '../api/client.js';
+import { employeesApi, shiftTypesApi, schedulesApi, vacationsApi } from '../api/client.js';
 import { format } from 'date-fns';
 
 const useStore = create((set, get) => ({
@@ -35,6 +35,52 @@ const useStore = create((set, get) => ({
   deleteEmployee: async (id) => {
     await employeesApi.delete(id);
     set((state) => ({ employees: state.employees.filter((e) => e.id !== id) }));
+  },
+
+  // ── Vacations ──────────────────────────────────────────────
+  fetchVacations: async (employeeId) => {
+    const data = await vacationsApi.list(employeeId);
+    set((state) => ({
+      employees: state.employees.map((e) =>
+        e.id === employeeId ? { ...e, vacations: data } : e
+      ),
+    }));
+    return data;
+  },
+
+  createVacation: async (employeeId, data) => {
+    const created = await vacationsApi.create(employeeId, data);
+    set((state) => ({
+      employees: state.employees.map((e) =>
+        e.id === employeeId
+          ? { ...e, vacations: [...(e.vacations || []), created] }
+          : e
+      ),
+    }));
+    return created;
+  },
+
+  updateVacation: async (employeeId, vid, data) => {
+    const updated = await vacationsApi.update(employeeId, vid, data);
+    set((state) => ({
+      employees: state.employees.map((e) =>
+        e.id === employeeId
+          ? { ...e, vacations: (e.vacations || []).map((v) => (v.id === vid ? updated : v)) }
+          : e
+      ),
+    }));
+    return updated;
+  },
+
+  deleteVacation: async (employeeId, vid) => {
+    await vacationsApi.delete(employeeId, vid);
+    set((state) => ({
+      employees: state.employees.map((e) =>
+        e.id === employeeId
+          ? { ...e, vacations: (e.vacations || []).filter((v) => v.id !== vid) }
+          : e
+      ),
+    }));
   },
 
   // ── Shift Types ────────────────────────────────────────────

@@ -12,15 +12,22 @@ export default function CalendarView({ scheduleData, currentMonth, currentYear, 
     if (!scheduleData?.entries) return [];
     return scheduleData.entries
       .filter((e) => !e.is_day_off)
-      .map((entry) => ({
-        id: String(entry.id),
-        title: `${entry.employee_name}: ${entry.shift_name || ''}`,
-        start: entry.date,
-        backgroundColor: entry.shift_color || '#93C5FD',
-        borderColor: entry.shift_color || '#93C5FD',
-        textColor: isDark(entry.shift_color) ? '#fff' : '#1f2937',
-        extendedProps: { entry },
-      }));
+      .map((entry) => {
+        const empColor = entry.employee_color || '#93C5FD';
+        const setorLabel = entry.setor_override || null;
+        const title = setorLabel
+          ? `${entry.employee_name}: ${entry.shift_name || ''} (${setorLabel})`
+          : `${entry.employee_name}: ${entry.shift_name || ''}`;
+        return {
+          id: String(entry.id),
+          title,
+          start: entry.date,
+          backgroundColor: empColor,
+          borderColor: empColor,
+          textColor: isDark(empColor) ? '#fff' : '#1f2937',
+          extendedProps: { entry },
+        };
+      });
   }, [scheduleData]);
 
   const initialDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;

@@ -21,7 +21,7 @@ export default function EmployeesPage() {
     (e) =>
       e.name.toLowerCase().includes(search.toLowerCase()) ||
       e.cargo.toLowerCase().includes(search.toLowerCase()) ||
-      e.setor.toLowerCase().includes(search.toLowerCase())
+      (e.setores || []).some((s) => s.toLowerCase().includes(search.toLowerCase()))
   );
 
   const handleEdit = (employee) => {

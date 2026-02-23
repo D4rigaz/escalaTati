@@ -9,13 +9,15 @@ export const EMENDADO_PAIRS = [
 ];
 
 const MIN_REST_HOURS        = 24;   // Fixo, não editável (regra 10)
-const MAX_CONSECUTIVE_HOURS = 18;   // Regra: máximo 18h consecutivas (24h proibido)
-const MIN_DAY_MOTORISTAS    = 4;    // Mínimo de motoristas no período diurno
-const MIN_NIGHT_MOTORISTAS  = 2;    // Mínimo de motoristas no período noturno
+const MAX_CONSECUTIVE_HOURS = 18;   // Regra: máximo 18h consecutivas
 const TARGET_HOURS          = 160;
 const DEFAULT_SHIFT_HOURS   = 12;   // Padrão esperado: plantão de 12 horas
 const SETOR_ADM             = 'Transporte Administrativo';
+const SETOR_AMBUL           = 'Transporte Ambulância';
+const SETOR_HEMO            = 'Transporte Hemodiálise';
 const SHIFT_ADM_NAME        = 'Administrativo'; // 10h
+const SHIFT_DIURNO_NAME     = 'Diurno';         // 12h (regra 16)
+const SHIFT_NOTURNO_NAME    = 'Noturno';        // 12h (regras 21/22)
 
 /**
  * Verifica se dois turnos formam um emendado válido (sem descanso).
@@ -38,10 +40,43 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   const shiftMap = {};
   for (const s of shiftTypes) shiftMap[s.id] = s;
 
+  const diurnoShift  = shiftTypes.find((s) => s.name === SHIFT_DIURNO_NAME);
+  const noturnoShift = shiftTypes.find((s) => s.name === SHIFT_NOTURNO_NAME);
+
   const daysInMonth = getDaysInMonth(new Date(year, month - 1, 1));
   const dates = [];
   for (let d = 1; d <= daysInMonth; d++) {
     dates.push(format(new Date(year, month - 1, d), 'yyyy-MM-dd'));
+  }
+
+  // Load employee sectors
+  const employeeIds = employees.map((e) => e.id);
+  const employeeSectorsMap = {};
+  if (employeeIds.length > 0) {
+    const allSectors = db.prepare('SELECT employee_id, setor FROM employee_sectors').all();
+    for (const s of allSectors) {
+      if (!employeeSectorsMap[s.employee_id]) employeeSectorsMap[s.employee_id] = [];
+      employeeSectorsMap[s.employee_id].push(s.setor);
+    }
+  }
+  for (const emp of employees) {
+    emp.setores = employeeSectorsMap[emp.id] || [];
+  }
+
+  // Load vacation dates: Set of "employeeId:YYYY-MM-DD"
+  const allVacationDates = new Set();
+  if (employeeIds.length > 0) {
+    const vacRows = db
+      .prepare('SELECT employee_id, start_date, end_date FROM employee_vacations')
+      .all();
+    for (const v of vacRows) {
+      let d = new Date(v.start_date + 'T12:00:00');
+      const end = new Date(v.end_date + 'T12:00:00');
+      while (d <= end) {
+        allVacationDates.add(`${v.employee_id}:${format(d, 'yyyy-MM-dd')}`);
+        d = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+      }
+    }
   }
 
   const warnings = [];
@@ -49,13 +84,22 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
 
   for (const employee of employees) {
     const result = runTransaction(() => {
-      return generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings);
+      return generateForEmployee(
+        db, employee, shiftTypes, shiftMap, dates,
+        overwriteLocked, warnings, allVacationDates
+      );
     });
     results.push(result);
   }
 
-  // Regra 5: verificar mínimo de motoristas por período após geração
-  checkMotoristaMinimums(db, employees, dates, warnings);
+  // Post-generation coverage checks (Rules 16, 19, 21, 22)
+  if (diurnoShift) {
+    enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings);
+  }
+  if (noturnoShift) {
+    enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings);
+  }
+  checkDailyDriverCoverage(db, dates, warnings);
 
   // Log generation
   db.prepare(
@@ -65,10 +109,10 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   return { results, warnings };
 }
 
-function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings) {
+function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates) {
   const rules = db
     .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
-    .get(employee.id) || { min_rest_hours: MIN_REST_HOURS, days_off_per_week: 1, preferred_shift_id: null };
+    .get(employee.id) || { min_rest_hours: MIN_REST_HOURS, preferred_shift_id: null };
 
   // Load existing locked entries
   const lockedEntries = db
@@ -88,8 +132,16 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       .run(employee.id, dates[0], dates[dates.length - 1]);
   }
 
-  // Determinar turno preferido e horas base pelo setor (regras 3, 4, 5)
-  const isAdm = employee.setor === SETOR_ADM;
+  const setores = employee.setores || [];
+  const isAdm = setores.includes(SETOR_ADM);
+  const isSegSex = employee.work_schedule === 'seg_sex';
+
+  // Vacation dates for this employee
+  const vacationDatesForEmp = new Set(
+    dates.filter((d) => allVacationDates.has(`${employee.id}:${d}`))
+  );
+
+  // Determine preferred shift based on sector
   const preferredShift = rules.preferred_shift_id
     ? shiftTypes.find((s) => s.id === rules.preferred_shift_id)
     : isAdm
@@ -105,7 +157,8 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   let lastShiftName = null;
   let consecutiveHours = 0;
   const entries = [];
-  const weeklyOffDates = new Set(); // dias de folga planejados (mínimo semanal)
+  // Vacation and other forced-off dates — preserved by correctHours
+  const lockedOffDates = new Set(vacationDatesForEmp);
 
   // Count locked hours
   for (const entry of lockedEntries) {
@@ -120,20 +173,38 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
 
   if (isAdm) {
     // Ciclo 36/42/42 para Administrativo (10h/turno)
-    // weekIndex % 3 === 0 → semana leve (≤3 turnos), senão pesada (≤4 turnos)
     for (let wi = 0; wi < weeks.length; wi++) {
       const week = weeks[wi];
-      const freeInWeek = week.filter((d) => !lockedDates.has(d));
 
-      const lockedOffCount = lockedEntries.filter(
-        (e) => e.is_day_off === 1 && week.includes(e.date)
-      ).length;
+      // Split into vacation, forced-off (seg_sex weekend), and workable days
+      const vacInWeek = week.filter((d) => vacationDatesForEmp.has(d) && !lockedDates.has(d));
+      const forcedOff = isSegSex
+        ? week.filter((d) => {
+            if (lockedDates.has(d) || vacationDatesForEmp.has(d)) return false;
+            const dow = new Date(d + 'T12:00:00').getDay();
+            return dow === 0 || dow === 6;
+          })
+        : [];
+      const freeInWeek = week.filter(
+        (d) => !lockedDates.has(d) && !vacationDatesForEmp.has(d) && !forcedOff.includes(d)
+      );
 
-      const daysOffNeeded = Math.max(0, (rules.days_off_per_week ?? 1) - lockedOffCount);
+      // Add vacation day-offs
+      for (const date of vacInWeek) {
+        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: 'Férias' });
+        consecutiveHours = 0;
+        lastShiftName = null;
+      }
+      // Add forced off (seg_sex weekends)
+      for (const date of forcedOff) {
+        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+        consecutiveHours = 0;
+        lastShiftName = null;
+      }
 
       // Ciclo leve/pesada: 0→leve(3), 1→pesada(4), 2→pesada(4)
       const maxTurnosNaSemana = wi % 3 === 0 ? 3 : 4;
-      const maxWorkInWeek = Math.min(freeInWeek.length - daysOffNeeded, maxTurnosNaSemana);
+      const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
       const actualOffInWeek = freeInWeek.length - Math.max(0, maxWorkInWeek);
 
       const selectedOff = selectOffDays(freeInWeek, actualOffInWeek);
@@ -142,7 +213,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       for (const date of selectedWork) {
         const shift = selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
         if (shift) {
-          entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0 });
+          entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
           totalHours += shift.duration_hours;
 
           const shiftStart = computeShiftStart(date, shift);
@@ -157,15 +228,14 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
           lastShiftEnd = computeShiftEnd(date, shift);
           lastShiftName = shift.name;
         } else {
-          entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0 });
+          entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
           consecutiveHours = 0;
           lastShiftName = null;
         }
       }
 
       for (const date of selectedOff) {
-        weeklyOffDates.add(date);
-        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0 });
+        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
         consecutiveHours = 0;
         lastShiftName = null;
       }
@@ -176,17 +246,33 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     let workDaysPlanned = 0;
 
     for (const week of weeks) {
-      const freeInWeek = week.filter((d) => !lockedDates.has(d));
+      const vacInWeek = week.filter((d) => vacationDatesForEmp.has(d) && !lockedDates.has(d));
+      const forcedOff = isSegSex
+        ? week.filter((d) => {
+            if (lockedDates.has(d) || vacationDatesForEmp.has(d)) return false;
+            const dow = new Date(d + 'T12:00:00').getDay();
+            return dow === 0 || dow === 6;
+          })
+        : [];
+      const freeInWeek = week.filter(
+        (d) => !lockedDates.has(d) && !vacationDatesForEmp.has(d) && !forcedOff.includes(d)
+      );
 
-      const lockedOffCount = lockedEntries.filter(
-        (e) => e.is_day_off === 1 && week.includes(e.date)
-      ).length;
-
-      const daysOffNeeded = Math.max(0, (rules.days_off_per_week ?? 1) - lockedOffCount);
-      const maxWorkInWeek = freeInWeek.length - daysOffNeeded;
+      // Add vacation day-offs
+      for (const date of vacInWeek) {
+        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: 'Férias' });
+        consecutiveHours = 0;
+        lastShiftName = null;
+      }
+      // Add forced off (seg_sex weekends)
+      for (const date of forcedOff) {
+        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+        consecutiveHours = 0;
+        lastShiftName = null;
+      }
 
       const remainingWorkDays = targetWorkDays - workDaysPlanned;
-      const actualWorkInWeek = Math.min(maxWorkInWeek, Math.max(0, remainingWorkDays));
+      const actualWorkInWeek = Math.min(freeInWeek.length, Math.max(0, remainingWorkDays));
       const actualOffInWeek = freeInWeek.length - actualWorkInWeek;
 
       const selectedOff = selectOffDays(freeInWeek, actualOffInWeek);
@@ -195,7 +281,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       for (const date of selectedWork) {
         const shift = selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
         if (shift) {
-          entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0 });
+          entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
           totalHours += shift.duration_hours;
 
           const shiftStart = computeShiftStart(date, shift);
@@ -211,33 +297,31 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
           lastShiftName = shift.name;
           workDaysPlanned++;
         } else {
-          entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0 });
+          entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
           consecutiveHours = 0;
           lastShiftName = null;
         }
       }
 
       for (const date of selectedOff) {
-        weeklyOffDates.add(date);
-        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0 });
+        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
         consecutiveHours = 0;
         lastShiftName = null;
       }
     }
   }
 
-  // Correction step — passa preferredShift e weeklyOffDates para garantir turno correto por setor
-  // e preservar folgas semanais obrigatórias (regra 6)
-  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, weeklyOffDates);
+  // Correction step — preserva lockedOffDates (férias)
+  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, lockedOffDates);
 
   // Persist
   const insertEntry = db.prepare(
-    `INSERT OR REPLACE INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked)
-     VALUES (?, ?, ?, ?, ?)`
+    `INSERT OR REPLACE INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked, notes)
+     VALUES (?, ?, ?, ?, ?, ?)`
   );
 
   for (const entry of corrected) {
-    insertEntry.run(entry.employee_id, entry.shift_type_id, entry.date, entry.is_day_off, entry.is_locked);
+    insertEntry.run(entry.employee_id, entry.shift_type_id, entry.date, entry.is_day_off, entry.is_locked, entry.notes ?? null);
   }
 
   const finalHours = corrected.reduce((sum, e) => {
@@ -266,7 +350,6 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
  * - Descanso mínimo fixo de 24h (regra 10)
  */
 function selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date) {
-  // Ordena candidatos: prefere turno do setor, depois 12h, depois menores
   const sorted = [...shiftTypes].sort((a, b) => {
     const preferA = a.duration_hours === DEFAULT_SHIFT_HOURS ? 0 : 1;
     const preferB = b.duration_hours === DEFAULT_SHIFT_HOURS ? 0 : 1;
@@ -284,16 +367,13 @@ function selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, co
     const restHours = (shiftStart - lastShiftEnd) / (1000 * 60 * 60);
 
     if (restHours === 0) {
-      // Só permite emendado se for combo válido
       if (!isValidEmendado(lastShiftName, shift.name)) continue;
-      // Bloqueia se emendado ultrapassaria o máximo de horas consecutivas
       if (consecutiveHours + shift.duration_hours > MAX_CONSECUTIVE_HOURS) continue;
-      return shift; // Emendado válido
+      return shift;
     }
 
     if (restHours < 0) continue; // Turno já passou
 
-    // Descanso mínimo fixo de 24h (regra 10)
     if (restHours < MIN_REST_HOURS) continue;
 
     return shift;
@@ -303,47 +383,275 @@ function selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, co
 }
 
 /**
- * Regra 5: verifica mínimo de motoristas por período após geração completa.
- * Todos os empregados são motoristas — filtrar por período é suficiente.
+ * Checks if an employee can work a given shift on a given date
+ * without violating the 24h minimum rest rule or emendado restrictions.
+ * Returns true if safe to assign, false otherwise.
  */
-function checkMotoristaMinimums(db, employees, dates, warnings) {
-  if (employees.length === 0) return;
+function canAssignShift(db, employeeId, date, shift) {
+  // Find the previous work entry before this date
+  const prevEntry = db.prepare(
+    `SELECT se.is_day_off, se.date as prev_date,
+            st.name as shift_name, st.start_time, st.duration_hours
+     FROM schedule_entries se
+     LEFT JOIN shift_types st ON se.shift_type_id = st.id
+     WHERE se.employee_id = ? AND se.date < ? AND se.is_day_off = 0
+     ORDER BY se.date DESC LIMIT 1`
+  ).get(employeeId, date);
 
-  const employeeIds = new Set(employees.map((e) => e.id));
+  if (prevEntry && prevEntry.start_time && prevEntry.duration_hours) {
+    const prevEnd = computeShiftEnd(prevEntry.prev_date, prevEntry);
+    const newStart = computeShiftStart(date, shift);
+    if (prevEnd && newStart) {
+      const restHours = (newStart - prevEnd) / (1000 * 60 * 60);
+      if (restHours === 0) {
+        if (!isValidEmendado(prevEntry.shift_name, shift.name)) return false;
+        // Reject if combined hours would exceed MAX_CONSECUTIVE_HOURS
+        if ((prevEntry.duration_hours || 0) + shift.duration_hours > MAX_CONSECUTIVE_HOURS) return false;
+      } else if (restHours < 0) {
+        return false;
+      } else if (restHours < MIN_REST_HOURS) {
+        return false;
+      }
+    }
+  }
 
-  const dayShiftNames   = new Set(['manhã', 'tarde', 'administrativo']);
-  const nightShiftNames = new Set(['noturno']);
+  // Also check next work entry after this date (to avoid pushing into < 24h rest)
+  const nextEntry = db.prepare(
+    `SELECT se.is_day_off, se.date as next_date,
+            st.name as shift_name, st.start_time, st.duration_hours
+     FROM schedule_entries se
+     LEFT JOIN shift_types st ON se.shift_type_id = st.id
+     WHERE se.employee_id = ? AND se.date > ? AND se.is_day_off = 0
+     ORDER BY se.date ASC LIMIT 1`
+  ).get(employeeId, date);
+
+  if (nextEntry && nextEntry.start_time && nextEntry.duration_hours) {
+    const newEnd = computeShiftEnd(date, shift);
+    const nextStart = computeShiftStart(nextEntry.next_date, nextEntry);
+    if (newEnd && nextStart) {
+      const restHours = (nextStart - newEnd) / (1000 * 60 * 60);
+      if (restHours === 0) {
+        if (!isValidEmendado(shift.name, nextEntry.shift_name)) return false;
+        // Reject if combined hours would exceed MAX_CONSECUTIVE_HOURS
+        if (shift.duration_hours + (nextEntry.duration_hours || 0) > MAX_CONSECUTIVE_HOURS) return false;
+      } else if (restHours < 0) {
+        return false;
+      } else if (restHours < MIN_REST_HOURS) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Employees already at/above this hours threshold are not eligible for
+ * coverage enforcement conversions — they already met their monthly target.
+ */
+const COVERAGE_HOURS_CAP = TARGET_HOURS;
+
+/**
+ * Returns the current total worked hours for an employee in the month dates range.
+ */
+function getEmployeeHours(db, employeeId, startDate, endDate) {
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(st.duration_hours), 0) as total
+     FROM schedule_entries se
+     LEFT JOIN shift_types st ON se.shift_type_id = st.id
+     WHERE se.employee_id = ? AND se.date >= ? AND se.date <= ? AND se.is_day_off = 0`
+  ).get(employeeId, startDate, endDate);
+  return row?.total ?? 0;
+}
+
+/**
+ * Rule 16: Cobertura diurna Seg–Sab.
+ * ≥2 motoristas de Hemodiálise e ≥1 de Ambulância no turno Diurno.
+ * Converte folgas (não bloqueadas) dos motoristas elegíveis se necessário.
+ */
+function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings) {
+  const startDate = dates[0];
+  const endDate = dates[dates.length - 1];
 
   for (const date of dates) {
+    const dow = new Date(date + 'T12:00:00').getDay();
+    if (dow === 0) continue; // skip Sunday
+
     const entries = db.prepare(
-      `SELECT se.employee_id, st.name as shift_name
+      `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.shift_type_id, se.notes,
+              st.name as shift_name
        FROM schedule_entries se
-       JOIN shift_types st ON se.shift_type_id = st.id
-       WHERE se.date = ? AND se.is_day_off = 0`
+       LEFT JOIN shift_types st ON se.shift_type_id = st.id
+       WHERE se.date = ?`
     ).all(date);
 
-    const activeEntries = entries.filter((e) => employeeIds.has(e.employee_id));
+    const entryByEmp = {};
+    for (const e of entries) entryByEmp[e.employee_id] = e;
 
-    const dayCount   = activeEntries.filter((e) => dayShiftNames.has(e.shift_name?.toLowerCase())).length;
-    const nightCount = activeEntries.filter((e) => nightShiftNames.has(e.shift_name?.toLowerCase())).length;
-
-    if (dayCount < MIN_DAY_MOTORISTAS) {
-      warnings.push({
-        type: 'motorista_dia',
-        date,
-        count: dayCount,
-        required: MIN_DAY_MOTORISTAS,
-        message: `${date}: apenas ${dayCount} motorista(s) no período diurno (mínimo: ${MIN_DAY_MOTORISTAS})`,
-      });
+    let hemoCount = 0;
+    let ambulCount = 0;
+    for (const emp of employees) {
+      const setores = employeeSectorsMap[emp.id] || [];
+      const entry = entryByEmp[emp.id];
+      if (!entry || entry.is_day_off) continue;
+      if (entry.shift_name === SHIFT_DIURNO_NAME) {
+        if (setores.includes(SETOR_HEMO)) hemoCount++;
+        if (setores.includes(SETOR_AMBUL)) ambulCount++;
+      }
     }
 
-    if (nightCount < MIN_NIGHT_MOTORISTAS) {
+    // Fix Hemo coverage (need ≥2)
+    if (hemoCount < 2) {
+      let fixed = 0;
+      const needed = 2 - hemoCount;
+      for (const emp of employees) {
+        if (fixed >= needed) break;
+        const setores = employeeSectorsMap[emp.id] || [];
+        if (!setores.includes(SETOR_HEMO)) continue;
+        const entry = entryByEmp[emp.id];
+        if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
+        if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        db.prepare(
+          'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
+        ).run(diurnoShift.id, entry.id);
+        entry.is_day_off = 0;
+        entry.shift_name = SHIFT_DIURNO_NAME;
+        fixed++;
+      }
+      if (hemoCount + fixed < 2) {
+        warnings.push({
+          type: 'diurno_hemo',
+          date,
+          count: hemoCount + fixed,
+          required: 2,
+          message: `${date}: cobertura insuficiente Hemodiálise turno Diurno (${hemoCount + fixed}/2)`,
+        });
+      }
+    }
+
+    // Recalculate ambulCount after potential Hemo conversions — a multi-sector
+    // (Hemo+Ambul) employee converted above would otherwise be counted twice.
+    ambulCount = 0;
+    for (const emp of employees) {
+      const setores = employeeSectorsMap[emp.id] || [];
+      if (!setores.includes(SETOR_AMBUL)) continue;
+      const entry = entryByEmp[emp.id];
+      if (!entry || entry.is_day_off) continue;
+      if (entry.shift_name === SHIFT_DIURNO_NAME) ambulCount++;
+    }
+
+    // Fix Ambul coverage (need ≥1)
+    if (ambulCount < 1) {
+      let fixed = false;
+      for (const emp of employees) {
+        if (fixed) break;
+        const setores = employeeSectorsMap[emp.id] || [];
+        if (!setores.includes(SETOR_AMBUL)) continue;
+        const entry = entryByEmp[emp.id];
+        if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
+        if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        db.prepare(
+          'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
+        ).run(diurnoShift.id, entry.id);
+        fixed = true;
+      }
+      if (!fixed) {
+        warnings.push({
+          type: 'diurno_ambul',
+          date,
+          count: ambulCount,
+          required: 1,
+          message: `${date}: cobertura insuficiente Ambulância turno Diurno (${ambulCount}/1)`,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Rules 21 & 22: Cobertura noturna por dia da semana.
+ * Ter/Qui/Sab (dow 2,4,6): ≥2 motoristas Ambulância no Noturno.
+ * Seg/Qua/Sex (dow 1,3,5): ≥1 motorista Ambulância no Noturno.
+ */
+function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings) {
+  const startDate = dates[0];
+  const endDate = dates[dates.length - 1];
+
+  for (const date of dates) {
+    const dow = new Date(date + 'T12:00:00').getDay();
+    const required = [2, 4, 6].includes(dow) ? 2 : [1, 3, 5].includes(dow) ? 1 : 0;
+    if (required === 0) continue;
+
+    const entries = db.prepare(
+      `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.notes,
+              st.name as shift_name
+       FROM schedule_entries se
+       LEFT JOIN shift_types st ON se.shift_type_id = st.id
+       WHERE se.date = ?`
+    ).all(date);
+
+    const entryByEmp = {};
+    for (const e of entries) entryByEmp[e.employee_id] = e;
+
+    let ambulNoturno = 0;
+    for (const emp of employees) {
+      const setores = employeeSectorsMap[emp.id] || [];
+      if (!setores.includes(SETOR_AMBUL)) continue;
+      const entry = entryByEmp[emp.id];
+      if (!entry || entry.is_day_off) continue;
+      if (entry.shift_name === SHIFT_NOTURNO_NAME) ambulNoturno++;
+    }
+
+    if (ambulNoturno < required) {
+      let fixed = 0;
+      const needed = required - ambulNoturno;
+      for (const emp of employees) {
+        if (fixed >= needed) break;
+        const setores = employeeSectorsMap[emp.id] || [];
+        if (!setores.includes(SETOR_AMBUL)) continue;
+        const entry = entryByEmp[emp.id];
+        if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
+        if (!canAssignShift(db, emp.id, date, noturnoShift)) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        db.prepare(
+          'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
+        ).run(noturnoShift.id, entry.id);
+        entry.is_day_off = 0;
+        entry.shift_name = SHIFT_NOTURNO_NAME;
+        fixed++;
+      }
+      if (ambulNoturno + fixed < required) {
+        warnings.push({
+          type: 'noturno_ambul',
+          date,
+          count: ambulNoturno + fixed,
+          required,
+          message: `${date}: cobertura insuficiente Ambulância turno Noturno (${ambulNoturno + fixed}/${required})`,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Rule 19: Todo dia deve ter pelo menos 1 motorista escalado.
+ */
+function checkDailyDriverCoverage(db, dates, warnings) {
+  for (const date of dates) {
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) as c FROM schedule_entries
+         WHERE date = ? AND is_day_off = 0
+           AND employee_id IN (SELECT id FROM employees WHERE active = 1)`
+      )
+      .get(date);
+    if (row.c === 0) {
       warnings.push({
-        type: 'motorista_noite',
+        type: 'sem_motorista',
         date,
-        count: nightCount,
-        required: MIN_NIGHT_MOTORISTAS,
-        message: `${date}: apenas ${nightCount} motorista(s) no período noturno (mínimo: ${MIN_NIGHT_MOTORISTAS})`,
+        message: `${date}: nenhum motorista escalado`,
       });
     }
   }
@@ -354,7 +662,7 @@ function buildWeeks(dates) {
   let currentWeek = [];
 
   for (const date of dates) {
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay(); // noon to avoid DST issues
+    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
 
     if (dayOfWeek === 0 && currentWeek.length > 0) {
       weeks.push(currentWeek);
@@ -405,8 +713,7 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
     }
   } else if (diff < -6) {
     // Too few hours: convert off days to the sector's preferred shift
-    // (preferredShift garante que ADM recebe turno de 10h, não 12h)
-    // Preserva folgas semanais obrigatórias (lockedOffDates) — regra 6
+    // Preserves lockedOffDates (férias, etc.)
     const shiftToAdd =
       preferredShift ||
       shiftTypes.find((s) => s.duration_hours === DEFAULT_SHIFT_HOURS) ||
@@ -414,7 +721,7 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
     let deficit = Math.abs(diff);
     for (const entry of offEntries) {
       if (deficit <= 0) break;
-      if (lockedOffDates.has(entry.date)) continue; // preserva folga semanal obrigatória
+      if (lockedOffDates.has(entry.date)) continue;
       entry.is_day_off = 0;
       entry.shift_type_id = shiftToAdd.id;
       deficit -= shiftToAdd.duration_hours;
