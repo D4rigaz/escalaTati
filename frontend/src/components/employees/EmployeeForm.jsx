@@ -28,7 +28,6 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
     register,
     handleSubmit,
     reset,
-    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     defaultValues: {

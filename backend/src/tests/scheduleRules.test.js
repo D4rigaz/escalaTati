@@ -137,27 +137,35 @@ describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
     expect(coverageWarnings.length).toBeGreaterThan(0);
   });
 
-  it('gera menos warnings noturnos com mais motoristas de Ambulância disponíveis', async () => {
-    const db = freshDb();
-    // 6 motoristas de Ambulância — suficiente para cobrir turnos noturnos
+  it('com 6 motoristas de Ambulância gera menos warnings noturnos que com 1 motorista', async () => {
+    // Cenário A: 6 motoristas
+    const db6 = freshDb();
     for (let i = 0; i < 6; i++) {
-      createEmployee(db, { name: `Motorista ${i}`, setor: 'Transporte Ambulância' });
+      createEmployee(db6, { name: `Motorista ${i}`, setor: 'Transporte Ambulância' });
     }
+    const res6 = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+    expect(res6.body.success).toBe(true);
+    const nightWarnings6 = res6.body.warnings.filter((w) => w.type === 'noturno_ambul');
+
+    // Cenário B: 1 motorista (linha base para comparação)
+    const dbSolo = freshDb();
+    createEmployee(dbSolo, { name: 'Solo', setor: 'Transporte Ambulância' });
+    const resSolo = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+    const nightWarningsSolo = resSolo.body.warnings.filter((w) => w.type === 'noturno_ambul');
+
+    // 6 motoristas devem produzir ≤ warnings do que 1 motorista
+    expect(nightWarnings6.length).toBeLessThanOrEqual(nightWarningsSolo.length);
+  });
+
+  it('com 1 motorista de Ambulância gera warnings noturnos em vários dias', async () => {
+    const db = freshDb();
+    createEmployee(db, { name: 'Solo', setor: 'Transporte Ambulância' });
 
     const res = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
     expect(res.body.success).toBe(true);
-
-    // Com 6 motoristas de Ambulância, warnings noturnos são menores do que com 1
-    const nightWarnings1 = res.body.warnings.filter((w) => w.type === 'noturno_ambul');
-
-    // Geração com 1 motorista para comparar
-    const db2 = freshDb();
-    createEmployee(db2, { name: 'Solo', setor: 'Transporte Ambulância' });
-    const res2 = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
-    const nightWarnings2 = res2.body.warnings.filter((w) => w.type === 'noturno_ambul');
-
-    // Com 6 motoristas deve ter menos (ou igual) warnings do que com 1
-    expect(nightWarnings1.length).toBeLessThanOrEqual(nightWarnings2.length);
+    const nightWarnings = res.body.warnings.filter((w) => w.type === 'noturno_ambul');
+    // 1 motorista não consegue cobrir todos os dias que exigem ≥2 Ambulância
+    expect(nightWarnings.length).toBeGreaterThan(0);
   });
 });

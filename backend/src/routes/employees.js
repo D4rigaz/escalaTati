@@ -247,6 +247,9 @@ router.post('/:id/vacations', (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start_date) || !/^\d{4}-\d{2}-\d{2}$/.test(end_date)) {
     return res.status(400).json({ error: 'Datas devem estar no formato YYYY-MM-DD' });
   }
+  if (isNaN(new Date(start_date).getTime()) || isNaN(new Date(end_date).getTime())) {
+    return res.status(400).json({ error: 'Datas inválidas (ex: 2025-02-30 não existe)' });
+  }
   if (end_date < start_date) {
     return res.status(400).json({ error: 'end_date deve ser >= start_date' });
   }
@@ -280,6 +283,9 @@ router.put('/:id/vacations/:vid', (req, res) => {
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(newStart) || !/^\d{4}-\d{2}-\d{2}$/.test(newEnd)) {
     return res.status(400).json({ error: 'Datas devem estar no formato YYYY-MM-DD' });
+  }
+  if (isNaN(new Date(newStart).getTime()) || isNaN(new Date(newEnd).getTime())) {
+    return res.status(400).json({ error: 'Datas inválidas (ex: 2025-02-30 não existe)' });
   }
   if (newEnd < newStart) {
     return res.status(400).json({ error: 'end_date deve ser >= start_date' });

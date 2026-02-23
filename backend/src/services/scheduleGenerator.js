@@ -405,8 +405,8 @@ function canAssignShift(db, employeeId, date, shift) {
       const restHours = (newStart - prevEnd) / (1000 * 60 * 60);
       if (restHours === 0) {
         if (!isValidEmendado(prevEntry.shift_name, shift.name)) return false;
-        // Also check max consecutive not exceeded
-        // (simplified: don't allow if prevEntry itself was an emendado giving ≥12h already)
+        // Reject if combined hours would exceed MAX_CONSECUTIVE_HOURS
+        if ((prevEntry.duration_hours || 0) + shift.duration_hours > MAX_CONSECUTIVE_HOURS) return false;
       } else if (restHours < 0) {
         return false;
       } else if (restHours < MIN_REST_HOURS) {
@@ -432,6 +432,8 @@ function canAssignShift(db, employeeId, date, shift) {
       const restHours = (nextStart - newEnd) / (1000 * 60 * 60);
       if (restHours === 0) {
         if (!isValidEmendado(shift.name, nextEntry.shift_name)) return false;
+        // Reject if combined hours would exceed MAX_CONSECUTIVE_HOURS
+        if (shift.duration_hours + (nextEntry.duration_hours || 0) > MAX_CONSECUTIVE_HOURS) return false;
       } else if (restHours < 0) {
         return false;
       } else if (restHours < MIN_REST_HOURS) {
@@ -476,7 +478,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
     if (dow === 0) continue; // skip Sunday
 
     const entries = db.prepare(
-      `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.shift_type_id,
+      `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.shift_type_id, se.notes,
               st.name as shift_name
        FROM schedule_entries se
        LEFT JOIN shift_types st ON se.shift_type_id = st.id
@@ -507,7 +509,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_HEMO)) continue;
         const entry = entryByEmp[emp.id];
-        if (!entry || !entry.is_day_off || entry.is_locked) continue;
+        if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         db.prepare(
@@ -528,6 +530,17 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
       }
     }
 
+    // Recalculate ambulCount after potential Hemo conversions — a multi-sector
+    // (Hemo+Ambul) employee converted above would otherwise be counted twice.
+    ambulCount = 0;
+    for (const emp of employees) {
+      const setores = employeeSectorsMap[emp.id] || [];
+      if (!setores.includes(SETOR_AMBUL)) continue;
+      const entry = entryByEmp[emp.id];
+      if (!entry || entry.is_day_off) continue;
+      if (entry.shift_name === SHIFT_DIURNO_NAME) ambulCount++;
+    }
+
     // Fix Ambul coverage (need ≥1)
     if (ambulCount < 1) {
       let fixed = false;
@@ -536,7 +549,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_AMBUL)) continue;
         const entry = entryByEmp[emp.id];
-        if (!entry || !entry.is_day_off || entry.is_locked) continue;
+        if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         db.prepare(
@@ -572,7 +585,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
     if (required === 0) continue;
 
     const entries = db.prepare(
-      `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked,
+      `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.notes,
               st.name as shift_name
        FROM schedule_entries se
        LEFT JOIN shift_types st ON se.shift_type_id = st.id
@@ -599,7 +612,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_AMBUL)) continue;
         const entry = entryByEmp[emp.id];
-        if (!entry || !entry.is_day_off || entry.is_locked) continue;
+        if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, noturnoShift)) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         db.prepare(
@@ -628,7 +641,11 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
 function checkDailyDriverCoverage(db, dates, warnings) {
   for (const date of dates) {
     const row = db
-      .prepare('SELECT COUNT(*) as c FROM schedule_entries WHERE date = ? AND is_day_off = 0')
+      .prepare(
+        `SELECT COUNT(*) as c FROM schedule_entries
+         WHERE date = ? AND is_day_off = 0
+           AND employee_id IN (SELECT id FROM employees WHERE active = 1)`
+      )
       .get(date);
     if (row.c === 0) {
       warnings.push({
