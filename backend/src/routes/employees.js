@@ -12,6 +12,13 @@ const SETORES_VALIDOS = [
 const WORK_SCHEDULES_VALIDOS = ['seg_sex', 'dom_sab'];
 const COLOR_REGEX = /^#[0-9A-Fa-f]{6}$/;
 
+/** Rejeita datas com componentes inválidos (ex: 2025-02-30 rola para março no V8). */
+function isValidCalendarDate(str) {
+  const [y, m, d] = str.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() + 1 === m && dt.getDate() === d;
+}
+
 /** Validate setores array. Returns error string or null. */
 function validateSetores(setores) {
   if (!Array.isArray(setores) || setores.length === 0) {
@@ -247,7 +254,7 @@ router.post('/:id/vacations', (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start_date) || !/^\d{4}-\d{2}-\d{2}$/.test(end_date)) {
     return res.status(400).json({ error: 'Datas devem estar no formato YYYY-MM-DD' });
   }
-  if (isNaN(new Date(start_date).getTime()) || isNaN(new Date(end_date).getTime())) {
+  if (!isValidCalendarDate(start_date) || !isValidCalendarDate(end_date)) {
     return res.status(400).json({ error: 'Datas inválidas (ex: 2025-02-30 não existe)' });
   }
   if (end_date < start_date) {
@@ -284,7 +291,7 @@ router.put('/:id/vacations/:vid', (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(newStart) || !/^\d{4}-\d{2}-\d{2}$/.test(newEnd)) {
     return res.status(400).json({ error: 'Datas devem estar no formato YYYY-MM-DD' });
   }
-  if (isNaN(new Date(newStart).getTime()) || isNaN(new Date(newEnd).getTime())) {
+  if (!isValidCalendarDate(newStart) || !isValidCalendarDate(newEnd)) {
     return res.status(400).json({ error: 'Datas inválidas (ex: 2025-02-30 não existe)' });
   }
   if (newEnd < newStart) {
