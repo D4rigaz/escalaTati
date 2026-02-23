@@ -16,6 +16,7 @@ export function getDb() {
     db.exec('PRAGMA foreign_keys = ON');
     initSchema();
     seedShiftTypes();
+    runMigrations();
     migrateShiftTimes();
   }
   return db;
@@ -46,10 +47,26 @@ function initSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       cargo TEXT NOT NULL,
-      setor TEXT NOT NULL,
+      work_schedule TEXT NOT NULL DEFAULT 'dom_sab',
+      color TEXT NOT NULL DEFAULT '#6B7280',
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS employee_sectors (
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      setor TEXT NOT NULL,
+      PRIMARY KEY (employee_id, setor)
+    );
+
+    CREATE TABLE IF NOT EXISTS employee_vacations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS shift_types (
@@ -65,7 +82,6 @@ function initSchema() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
       min_rest_hours INTEGER NOT NULL DEFAULT 11,
-      days_off_per_week INTEGER NOT NULL DEFAULT 1,
       preferred_shift_id INTEGER REFERENCES shift_types(id),
       notes TEXT
     );
@@ -78,6 +94,7 @@ function initSchema() {
       is_day_off INTEGER NOT NULL DEFAULT 0,
       is_locked INTEGER NOT NULL DEFAULT 0,
       notes TEXT,
+      setor_override TEXT,
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(employee_id, date)
     );
@@ -90,6 +107,53 @@ function initSchema() {
       params_json TEXT
     );
   `);
+}
+
+/**
+ * Handles schema upgrades for existing databases.
+ * Uses PRAGMA table_info to detect which migrations are needed.
+ * Safe to run on fresh DBs — each migration checks before applying.
+ */
+function runMigrations() {
+  const empCols  = db.prepare('PRAGMA table_info(employees)').all().map((c) => c.name);
+  const restCols = db.prepare('PRAGMA table_info(employee_rest_rules)').all().map((c) => c.name);
+  const entryCols = db.prepare('PRAGMA table_info(schedule_entries)').all().map((c) => c.name);
+
+  // Add work_schedule to employees (old DBs)
+  if (!empCols.includes('work_schedule')) {
+    db.exec("ALTER TABLE employees ADD COLUMN work_schedule TEXT NOT NULL DEFAULT 'dom_sab'");
+  }
+
+  // Add color to employees (old DBs)
+  if (!empCols.includes('color')) {
+    db.exec("ALTER TABLE employees ADD COLUMN color TEXT NOT NULL DEFAULT '#6B7280'");
+  }
+
+  // Migrate setor column → employee_sectors table
+  if (empCols.includes('setor')) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS employee_sectors (
+        employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        setor TEXT NOT NULL,
+        PRIMARY KEY (employee_id, setor)
+      )
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO employee_sectors (employee_id, setor)
+      SELECT id, setor FROM employees WHERE setor IS NOT NULL AND setor != ''
+    `);
+    db.exec('ALTER TABLE employees DROP COLUMN setor');
+  }
+
+  // Remove days_off_per_week from employee_rest_rules (old DBs)
+  if (restCols.includes('days_off_per_week')) {
+    db.exec('ALTER TABLE employee_rest_rules DROP COLUMN days_off_per_week');
+  }
+
+  // Add setor_override to schedule_entries (old DBs)
+  if (!entryCols.includes('setor_override')) {
+    db.exec('ALTER TABLE schedule_entries ADD COLUMN setor_override TEXT');
+  }
 }
 
 function seedShiftTypes() {
@@ -109,6 +173,9 @@ function seedShiftTypes() {
     db.prepare(
       'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
     ).run('Administrativo', '07:00', '17:00', 10, '#10B981');
+    db.prepare(
+      'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
+    ).run('Diurno', '07:00', '19:00', 12, '#34D399');
   });
 }
 
@@ -123,6 +190,9 @@ function migrateShiftTimes() {
     db.prepare(
       "INSERT OR IGNORE INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?,?,?,?,?)"
     ).run('Administrativo', '07:00', '17:00', 10, '#10B981');
+    db.prepare(
+      "INSERT OR IGNORE INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?,?,?,?,?)"
+    ).run('Diurno', '07:00', '19:00', 12, '#34D399');
   });
 }
 

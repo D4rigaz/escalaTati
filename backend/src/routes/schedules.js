@@ -20,7 +20,9 @@ router.get('/', (req, res) => {
 
   const entries = db
     .prepare(
-      `SELECT se.*, e.name as employee_name, e.cargo, e.setor,
+      `SELECT se.*,
+              e.name as employee_name, e.cargo, e.color as employee_color,
+              e.work_schedule as employee_work_schedule,
               st.name as shift_name, st.color as shift_color, st.start_time, st.end_time, st.duration_hours
        FROM schedule_entries se
        JOIN employees e ON se.employee_id = e.id
@@ -86,11 +88,24 @@ router.post('/generate', async (req, res) => {
 // PUT /api/schedules/entry/:id
 router.put('/entry/:id', (req, res) => {
   const db = getDb();
-  const { shift_type_id, is_day_off, is_locked, notes } = req.body;
+  const { shift_type_id, is_day_off, is_locked, notes, setor_override } = req.body;
   const id = parseInt(req.params.id);
 
-  const entry = db.prepare('SELECT id FROM schedule_entries WHERE id = ?').get(id);
+  const entry = db
+    .prepare('SELECT se.*, e.id as emp_id FROM schedule_entries se JOIN employees e ON se.employee_id = e.id WHERE se.id = ?')
+    .get(id);
   if (!entry) return res.status(404).json({ error: 'Entry not found' });
+
+  // Validate setor_override belongs to the employee's setores
+  if (setor_override !== undefined && setor_override !== null) {
+    const empSetores = db
+      .prepare('SELECT setor FROM employee_sectors WHERE employee_id = ?')
+      .all(entry.employee_id)
+      .map((r) => r.setor);
+    if (!empSetores.includes(setor_override)) {
+      return res.status(400).json({ error: 'setor_override deve ser um setor do funcionário' });
+    }
+  }
 
   if (shift_type_id !== undefined)
     db.prepare('UPDATE schedule_entries SET shift_type_id = ? WHERE id = ?').run(shift_type_id, id);
@@ -100,6 +115,8 @@ router.put('/entry/:id', (req, res) => {
     db.prepare('UPDATE schedule_entries SET is_locked = ? WHERE id = ?').run(is_locked ? 1 : 0, id);
   if (notes !== undefined)
     db.prepare('UPDATE schedule_entries SET notes = ? WHERE id = ?').run(notes, id);
+  if (setor_override !== undefined)
+    db.prepare('UPDATE schedule_entries SET setor_override = ? WHERE id = ?').run(setor_override, id);
 
   const updated = db
     .prepare(

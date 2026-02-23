@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
-import { format, parseISO, getDaysInMonth, startOfMonth } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
+import { getDaysInMonth } from 'date-fns';
 import { Lock } from 'lucide-react';
 
 const DAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -16,11 +15,15 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
 
     if (!scheduleData?.entries) return { dates, employees: [], entryMatrix: {} };
 
-    // Collect unique employees
+    // Collect unique employees (with color)
     const empMap = {};
     for (const e of scheduleData.entries) {
       if (!empMap[e.employee_id]) {
-        empMap[e.employee_id] = { id: e.employee_id, name: e.employee_name };
+        empMap[e.employee_id] = {
+          id: e.employee_id,
+          name: e.employee_name,
+          color: e.employee_color || '#6B7280',
+        };
       }
     }
     const employees = Object.values(empMap).sort((a, b) => a.name.localeCompare(b.name));
@@ -77,8 +80,17 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
 
             return (
               <tr key={emp.id} className="hover:bg-gray-50">
-                <td className="sticky left-0 bg-white px-3 py-1.5 font-medium text-gray-700 border border-gray-200 truncate max-w-[160px]">
-                  {emp.name}
+                <td
+                  className="sticky left-0 bg-white px-3 py-1.5 font-medium text-gray-700 border border-gray-200 truncate max-w-[160px]"
+                  style={{ borderLeft: `3px solid ${emp.color}` }}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="shrink-0 inline-block rounded-full"
+                      style={{ width: 8, height: 8, backgroundColor: emp.color }}
+                    />
+                    {emp.name}
+                  </div>
                 </td>
                 {dates.map(({ date }) => {
                   const entry = empEntries[date];
@@ -95,6 +107,7 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
                         key={date}
                         className="border border-gray-200 text-center bg-gray-100 text-gray-400 cursor-pointer hover:bg-gray-200"
                         onClick={() => onEntryClick?.(entry)}
+                        title={entry.notes || 'Folga'}
                       >
                         F
                       </td>
@@ -106,9 +119,16 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
                     <td
                       key={date}
                       className="border border-gray-200 text-center cursor-pointer hover:opacity-80 relative"
-                      style={{ backgroundColor: entry.shift_color || '#e5e7eb' }}
+                      style={{
+                        backgroundColor: entry.shift_color || '#e5e7eb',
+                        borderLeft: `2px solid ${emp.color}`,
+                      }}
                       onClick={() => onEntryClick?.(entry)}
-                      title={`${entry.shift_name} (${entry.start_time}–${entry.end_time})`}
+                      title={
+                        entry.setor_override
+                          ? `${entry.shift_name} (${entry.start_time}–${entry.end_time}) — ${entry.setor_override}`
+                          : `${entry.shift_name} (${entry.start_time}–${entry.end_time})`
+                      }
                     >
                       <span className="font-bold text-gray-800">{initial}</span>
                       {entry.is_locked ? (
@@ -116,6 +136,9 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
                           <Lock size={8} />
                         </span>
                       ) : null}
+                      {entry.setor_override && (
+                        <span className="absolute bottom-0 left-0 w-full h-0.5 bg-amber-400" />
+                      )}
                     </td>
                   );
                 })}

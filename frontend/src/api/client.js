@@ -31,6 +31,18 @@ export const schedulesApi = {
     client.delete('/schedules/month', { params: { month, year } }).then((r) => r.data),
 };
 
+// Vacations
+export const vacationsApi = {
+  list: (employeeId) =>
+    client.get(`/employees/${employeeId}/vacations`).then((r) => r.data),
+  create: (employeeId, data) =>
+    client.post(`/employees/${employeeId}/vacations`, data).then((r) => r.data),
+  update: (employeeId, vid, data) =>
+    client.put(`/employees/${employeeId}/vacations/${vid}`, data).then((r) => r.data),
+  delete: (employeeId, vid) =>
+    client.delete(`/employees/${employeeId}/vacations/${vid}`).then((r) => r.data),
+};
+
 // Export (returns blob)
 export const exportApi = {
   excel: (month, year) =>
