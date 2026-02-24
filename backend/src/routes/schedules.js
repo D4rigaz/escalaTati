@@ -88,7 +88,9 @@ router.post('/generate', async (req, res) => {
 // PUT /api/schedules/entry/:id
 router.put('/entry/:id', (req, res) => {
   const db = getDb();
-  const { shift_type_id, is_day_off, is_locked, notes, setor_override } = req.body;
+  const { shift_type_id, is_day_off, is_locked, notes } = req.body;
+  // Normalizar string vazia para null — "" não é um setor válido e não deve ser gravado no DB.
+  const setor_override = req.body.setor_override === '' ? null : req.body.setor_override;
   const id = parseInt(req.params.id);
 
   const entry = db
