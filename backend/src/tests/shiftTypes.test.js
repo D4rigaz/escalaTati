@@ -6,15 +6,16 @@ import { freshDb } from './helpers.js';
 beforeEach(() => freshDb());
 
 describe('GET /api/shift-types', () => {
-  it('retorna os 4 turnos padrão após seed', async () => {
+  it('retorna os 5 turnos padrão após seed', async () => {
     const res = await request(app).get('/api/shift-types');
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(4); // Manhã, Tarde, Noturno, Administrativo (regra 3)
+    expect(res.body).toHaveLength(5); // Manhã, Tarde, Noturno, Administrativo, Diurno (regra 16)
     const names = res.body.map((s) => s.name);
     expect(names).toContain('Manhã');
     expect(names).toContain('Tarde');
     expect(names).toContain('Noturno');
     expect(names).toContain('Administrativo');
+    expect(names).toContain('Diurno');
   });
 
   it('cada turno tem os campos necessários', async () => {

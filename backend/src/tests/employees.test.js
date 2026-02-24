@@ -42,7 +42,7 @@ describe('GET /api/employees', () => {
     const res = await request(app).get('/api/employees');
     expect(res.status).toBe(200);
     expect(res.body[0].restRules).toBeTruthy();
-    expect(res.body[0].restRules.min_rest_hours).toBe(11);
+    expect(res.body[0].restRules.min_rest_hours).toBe(24); // fixo em 24h (regra 10)
   });
 });
 
@@ -68,7 +68,7 @@ describe('POST /api/employees', () => {
     freshDb();
     const res = await request(app)
       .post('/api/employees')
-      .send({ name: 'Diana', setor: 'Transporte Ambulância' });
+      .send({ name: 'Diana', setores: ['Transporte Ambulância'] });
 
     expect(res.status).toBe(201);
     expect(res.body.name).toBe('Diana');
@@ -93,15 +93,16 @@ describe('POST /api/employees', () => {
     expect(res.body.error).toMatch(/setor/i);
   });
 
-  it('aplica days_off_per_week customizado', async () => {
+  it('restRules.min_rest_hours é sempre 24 independente do input (regra 13)', async () => {
+    // days_off_per_week foi removido na Regra 13 — descanso só via MIN_REST_HOURS=24
     freshDb();
     const res = await request(app)
       .post('/api/employees')
-      .send({ name: 'Eduardo', setor: 'Transporte Hemodiálise', restRules: { days_off_per_week: 2 } });
+      .send({ name: 'Eduardo', setores: ['Transporte Hemodiálise'] });
 
     expect(res.status).toBe(201);
-    expect(res.body.restRules.min_rest_hours).toBe(24); // fixo em 24h (regra 10)
-    expect(res.body.restRules.days_off_per_week).toBe(2);
+    expect(res.body.restRules.min_rest_hours).toBe(24);
+    expect(res.body.restRules.days_off_per_week).toBeUndefined();
   });
 });
 
