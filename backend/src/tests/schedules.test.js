@@ -211,6 +211,26 @@ describe('PUT /api/schedules/entry/:id', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/setor_override/i);
   });
+
+  it('omitir setor_override não altera valor existente (no-op)', async () => {
+    // Garante que o guard `setor_override !== undefined` funciona corretamente:
+    // campos não enviados no payload não devem sobrescrever o valor no DB.
+    const db = freshDb();
+    const emp = createEmployee(db, { name: 'Igor', setores: ['Transporte Ambulância'] });
+
+    const result = db
+      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES (?, ?, 0, ?)')
+      .run(emp.id, '2025-03-19', 'Transporte Ambulância');
+
+    // Atualiza apenas notes — setor_override não enviado
+    const res = await request(app)
+      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .send({ notes: 'Observação' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.setor_override).toBe('Transporte Ambulância'); // inalterado
+    expect(res.body.notes).toBe('Observação');
+  });
 });
 
 describe('DELETE /api/schedules/month', () => {
