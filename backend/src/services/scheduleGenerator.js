@@ -157,8 +157,15 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   let lastShiftName = null;
   let consecutiveHours = 0;
   const entries = [];
-  // Vacation and other forced-off dates — preserved by correctHours
-  const lockedOffDates = new Set(vacationDatesForEmp);
+  // Vacation and seg_sex forced-off weekend dates — preserved by correctHours
+  const segSexForcedOff = isSegSex
+    ? new Set(dates.filter((d) => {
+        if (lockedDates.has(d) || vacationDatesForEmp.has(d)) return false;
+        const dow = new Date(d + 'T12:00:00').getDay();
+        return dow === 0 || dow === 6;
+      }))
+    : new Set();
+  const lockedOffDates = new Set([...vacationDatesForEmp, ...segSexForcedOff]);
 
   // Count locked hours
   for (const entry of lockedEntries) {

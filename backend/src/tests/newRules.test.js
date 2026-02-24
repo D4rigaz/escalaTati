@@ -27,16 +27,11 @@ describe('Regra 12 — work_schedule seg_sex: Sáb/Dom viram folga obrigatória'
     expect(res.status).toBe(400);
   });
 
-  it.skip('gerador marca Domingos como folga para funcionário seg_sex (Domingos nunca são alvo de enforcement)', async () => {
-    // BUG CONHECIDO no gerador (ver issue #12):
-    // `correctHours` pode converter Domingos de volta a plantão quando o funcionário
-    // tem horas insuficientes. O problema está em `lockedOffDates` (scheduleGenerator.js:161)
-    // que só inclui `vacationDatesForEmp`, mas não os dias `seg_sex` forcedOff.
-    // O enforcement (enforceNocturnalCoverage) de fato pula Domingos (dow=0),
-    // mas `correctHours` não tem esse guard. Fix: adicionar forcedOff a lockedOffDates.
-    //
+  it('gerador marca Domingos como folga para funcionário seg_sex (Domingos nunca são alvo de enforcement)', async () => {
     // Domingos (dow=0) não têm requisito de cobertura nas Regras 21/22,
     // portanto nunca são convertidos pelo enforcement — assert 100% seguro.
+    // Fix aplicado (issue #13): segSexForcedOff agora integra lockedOffDates,
+    // impedindo que correctHours converta fins-de-semana de volta a plantão.
     const empRes = await request(app).post('/api/employees').send({
       name: 'Bruno',
       setores: ['Transporte Ambulância'],
