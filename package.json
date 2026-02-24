@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "test": "npm test --workspace=backend && npm test --workspace=frontend",
     "install:all": "npm install && npm install --workspace=backend && npm install --workspace=frontend"
   },
   "devDependencies": {

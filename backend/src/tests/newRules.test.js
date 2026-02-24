@@ -51,6 +51,51 @@ describe('Regra 12 — work_schedule seg_sex: Sáb/Dom viram folga obrigatória'
     });
   });
 
+  it('gerador marca Sábados como folga para funcionário seg_sex — enforcement não converte (issue #18)', async () => {
+    // Mesmo que enforcement (Regras 16/21/22) precise de cobertura no Sábado,
+    // um funcionário seg_sex nunca pode ser convertido nesse dia.
+    // Fix aplicado (issue #18): guard `emp.work_schedule === 'seg_sex' && dow === 6`
+    // adicionado em enforceDiurnoCoverage e enforceNocturnalCoverage.
+    const empRes = await request(app).post('/api/employees').send({
+      name: 'Bruno Sab',
+      setores: ['Transporte Ambulância'],
+      work_schedule: 'seg_sex',
+    });
+    expect(empRes.status).toBe(201);
+
+    await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+
+    const schedule = await request(app).get('/api/schedules?month=1&year=2025');
+    const entries = schedule.body.entries.filter((e) => e.employee_id === empRes.body.id);
+
+    const saturdayEntries = entries.filter((e) => new Date(e.date + 'T12:00:00').getDay() === 6);
+    expect(saturdayEntries.length).toBeGreaterThan(0); // Janeiro 2025 tem 4 sábados
+    saturdayEntries.forEach((e) => {
+      expect(e.is_day_off).toBe(1);
+    });
+  });
+
+  it('warning emitido quando único candidato de Sábado noturno é seg_sex (guard não deve silenciar warning)', async () => {
+    // Quando o guard bloqueia a conversão de um seg_sex no Sábado, o enforcement
+    // não encontra candidatos e DEVE emitir um warning noturno_ambul para esse dia.
+    // Isso garante que o guard não esconde problemas reais de cobertura.
+    const empRes = await request(app).post('/api/employees').send({
+      name: 'Único SegSex',
+      setores: ['Transporte Ambulância'],
+      work_schedule: 'seg_sex',
+    });
+    expect(empRes.status).toBe(201);
+
+    const genRes = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+
+    // Sábados com requisito ≥2 Ambul noturno (Ter/Qui/Sáb = dow 2,4,6)
+    // O único funcionário é seg_sex, portanto não pode ser convertido no Sábado.
+    const satWarnings = genRes.body.warnings.filter(
+      (w) => w.type === 'noturno_ambul' && new Date(w.date + 'T12:00:00').getDay() === 6
+    );
+    expect(satWarnings.length).toBeGreaterThan(0);
+  });
+
   it('funcionário seg_sex tem mais folgas em fins-de-semana que funcionário dom_sab equivalente', async () => {
     // Cria seg_sex e dom_sab com mesmo setor; compara contagem de folgas em Sáb/Dom
     const resSeg = await request(app).post('/api/employees').send({
