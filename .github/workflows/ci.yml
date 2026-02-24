@@ -7,7 +7,7 @@ on:
     branches: ["master", "main"]
 
 jobs:
-  test:
+  backend-tests:
     name: Backend Tests
     runs-on: ubuntu-latest
 
@@ -31,3 +31,26 @@ jobs:
         working-directory: backend
         env:
           DB_PATH: ":memory:"
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Run tests
+        run: npm test
+        working-directory: frontend
