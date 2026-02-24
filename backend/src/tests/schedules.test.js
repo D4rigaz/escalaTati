@@ -144,6 +144,73 @@ describe('PUT /api/schedules/entry/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.notes).toBe('Licença médica');
   });
+
+  it('setor_override "" é normalizado para null (issue #15)', async () => {
+    const db = freshDb();
+    const emp = createEmployee(db, { name: 'Eduardo', setores: ['Transporte Ambulância'] });
+
+    const result = db
+      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES (?, ?, 0, ?)')
+      .run(emp.id, '2025-03-15', 'Transporte Ambulância');
+
+    const res = await request(app)
+      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .send({ setor_override: '' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.setor_override).toBeNull();
+  });
+
+  it('setor_override null limpa o override existente', async () => {
+    const db = freshDb();
+    const emp = createEmployee(db, { name: 'Flávia', setores: ['Transporte Ambulância'] });
+
+    const result = db
+      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES (?, ?, 0, ?)')
+      .run(emp.id, '2025-03-16', 'Transporte Ambulância');
+
+    const res = await request(app)
+      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .send({ setor_override: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.setor_override).toBeNull();
+  });
+
+  it('setor_override válido é aceito e persistido', async () => {
+    const db = freshDb();
+    const emp = createEmployee(db, {
+      name: 'Gustavo',
+      setores: ['Transporte Ambulância', 'Transporte Hemodiálise'],
+    });
+
+    const result = db
+      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES (?, ?, 0)')
+      .run(emp.id, '2025-03-17');
+
+    const res = await request(app)
+      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .send({ setor_override: 'Transporte Hemodiálise' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.setor_override).toBe('Transporte Hemodiálise');
+  });
+
+  it('setor_override inválido (não pertence ao funcionário) retorna 400', async () => {
+    const db = freshDb();
+    const emp = createEmployee(db, { name: 'Helena', setores: ['Transporte Ambulância'] });
+
+    const result = db
+      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES (?, ?, 0)')
+      .run(emp.id, '2025-03-18');
+
+    const res = await request(app)
+      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .send({ setor_override: 'Transporte Hemodiálise' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/setor_override/i);
+  });
 });
 
 describe('DELETE /api/schedules/month', () => {
