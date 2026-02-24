@@ -70,11 +70,11 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
       .prepare('SELECT employee_id, start_date, end_date FROM employee_vacations')
       .all();
     for (const v of vacRows) {
-      let d = new Date(v.start_date + 'T12:00:00');
-      const end = new Date(v.end_date + 'T12:00:00');
-      while (d <= end) {
-        allVacationDates.add(`${v.employee_id}:${format(d, 'yyyy-MM-dd')}`);
-        d = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+      let cursor = v.start_date;
+      while (cursor <= v.end_date) {
+        allVacationDates.add(`${v.employee_id}:${cursor}`);
+        const [y, m, day] = cursor.split('-').map(Number);
+        cursor = new Date(Date.UTC(y, m - 1, day + 1)).toISOString().slice(0, 10);
       }
     }
   }
