@@ -168,4 +168,29 @@ describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
     // 1 motorista não consegue cobrir todos os dias que exigem ≥2 Ambulância
     expect(nightWarnings.length).toBeGreaterThan(0);
   });
+
+  it('entries convertidas pelo enforcement têm shift_type_id consistente com shift_name (issue #17)', async () => {
+    // Issue #17: após enforcement converter uma folga em plantão, a cópia em
+    // memória não atualizava shift_type_id (nem is_day_off/shift_name no bloco
+    // Ambul diurno). Garante invariante: shift_type_id e shift_name são coerentes
+    // em todas as entries de plantão.
+    const db = freshDb();
+    createEmployee(db, { name: 'HemoA', setor: 'Transporte Hemodiálise' });
+    createEmployee(db, { name: 'HemoB', setor: 'Transporte Hemodiálise' });
+    createEmployee(db, { name: 'AmbuA', setor: 'Transporte Ambulância' });
+
+    await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+
+    const shiftsRes = await request(app).get('/api/shift-types');
+    const shiftById = {};
+    for (const s of shiftsRes.body) shiftById[s.id] = s.name;
+
+    const schedule = await request(app).get('/api/schedules?month=1&year=2025');
+    const workEntries = schedule.body.entries.filter((e) => !e.is_day_off);
+
+    expect(workEntries.length).toBeGreaterThan(0);
+    workEntries.forEach((e) => {
+      expect(shiftById[e.shift_type_id]).toBe(e.shift_name);
+    });
+  });
 });
