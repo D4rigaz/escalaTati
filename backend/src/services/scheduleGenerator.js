@@ -515,6 +515,8 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         if (fixed >= needed) break;
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_HEMO)) continue;
+        // Regra 12: seg_sex nunca trabalha Sábado (dow=6); domingo já é excluído acima.
+        if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
@@ -555,6 +557,8 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         if (fixed) break;
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_AMBUL)) continue;
+        // Regra 12: seg_sex nunca trabalha Sábado (dow=6); domingo já é excluído acima.
+        if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
@@ -618,6 +622,8 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
         if (fixed >= needed) break;
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_AMBUL)) continue;
+        // Regra 12: seg_sex nunca trabalha Sábado (dow=6); domingo já tem required=0 acima.
+        if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, noturnoShift)) continue;
