@@ -526,6 +526,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         ).run(diurnoShift.id, entry.id);
         entry.is_day_off = 0;
         entry.shift_name = SHIFT_DIURNO_NAME;
+        entry.shift_type_id = diurnoShift.id;
         fixed++;
       }
       if (hemoCount + fixed < 2) {
@@ -566,6 +567,9 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         db.prepare(
           'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
         ).run(diurnoShift.id, entry.id);
+        entry.is_day_off = 0;
+        entry.shift_name = SHIFT_DIURNO_NAME;
+        entry.shift_type_id = diurnoShift.id;
         fixed = true;
       }
       if (!fixed) {
@@ -633,6 +637,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
         ).run(noturnoShift.id, entry.id);
         entry.is_day_off = 0;
         entry.shift_name = SHIFT_NOTURNO_NAME;
+        entry.shift_type_id = noturnoShift.id;
         fixed++;
       }
       if (ambulNoturno + fixed < required) {
