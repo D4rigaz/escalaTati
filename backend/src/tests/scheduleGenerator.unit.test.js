@@ -46,4 +46,32 @@ describe('correctHours', () => {
     const hours = result.filter(e => !e.is_day_off).length * 12;
     expect(hours).toBeGreaterThan(120);
   });
+
+  it('não converte folga que viola 24h de descanso após turno noturno', () => {
+    const nocturno = { id: 1, name: 'Noturno', duration_hours: 12, start_time: '19:00' };
+    const localShiftTypes = [nocturno];
+    const localShiftMap   = { 1: nocturno };
+
+    // Sex Noturno (19:00 → Sáb 07:00); Sáb folga = apenas 12h rest → deve ser ignorada
+    // Seg e Ter folgas (>24h de descanso) → devem ser convertidas para cobrir o déficit
+    const entries = [
+      { date: '2025-01-06', is_day_off: 0, shift_type_id: 1 }, // Seg
+      { date: '2025-01-07', is_day_off: 0, shift_type_id: 1 }, // Ter
+      { date: '2025-01-08', is_day_off: 0, shift_type_id: 1 }, // Qua
+      { date: '2025-01-09', is_day_off: 0, shift_type_id: 1 }, // Qui
+      { date: '2025-01-10', is_day_off: 0, shift_type_id: 1 }, // Sex (termina Sáb 07:00)
+      { date: '2025-01-11', is_day_off: 1, shift_type_id: null }, // Sáb (12h rest → ignorar)
+      { date: '2025-01-13', is_day_off: 1, shift_type_id: null }, // Seg folga boa
+      { date: '2025-01-14', is_day_off: 1, shift_type_id: null }, // Ter folga boa
+    ];
+    // currentHours = 5*12 = 60, target = 84 → deficit = 24h (precisa converter 2 folgas)
+
+    correctHours(entries, localShiftTypes, localShiftMap, 60, 84, nocturno);
+
+    const sab = entries.find(e => e.date === '2025-01-11');
+    expect(sab.is_day_off).toBe(1); // NÃO convertida — violaria 24h rest
+
+    const converted = entries.filter(e => !e.is_day_off);
+    expect(converted.length).toBeGreaterThan(5); // folgas boas foram convertidas
+  });
 });

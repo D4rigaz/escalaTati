@@ -710,6 +710,49 @@ function computeShiftEnd(date, shift) {
   return new Date(start.getTime() + shift.duration_hours * 60 * 60 * 1000);
 }
 
+/**
+ * Verifica se inserir `shift` na data de `targetEntry` respeita ≥24h de descanso
+ * em relação aos turnos adjacentes já existentes em `allEntries` (in-memory).
+ * Retorna true se é seguro converter; false caso contrário.
+ */
+function hasAdequateRest(allEntries, targetEntry, shift, shiftMap) {
+  const targetDate = targetEntry.date;
+
+  const workEntries = allEntries
+    .filter(e => !e.is_day_off && e.shift_type_id)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  // Turno anterior
+  const prev = [...workEntries].reverse().find(e => e.date < targetDate);
+  if (prev) {
+    const prevShift = shiftMap[prev.shift_type_id];
+    if (prevShift) {
+      const prevEnd  = computeShiftEnd(prev.date, prevShift);
+      const newStart = computeShiftStart(targetDate, shift);
+      if (prevEnd && newStart) {
+        const restMs = newStart - prevEnd;
+        if (restMs < MIN_REST_HOURS * 3_600_000) return false;
+      }
+    }
+  }
+
+  // Turno seguinte
+  const next = workEntries.find(e => e.date > targetDate);
+  if (next) {
+    const nextShift = shiftMap[next.shift_type_id];
+    if (nextShift) {
+      const newEnd    = computeShiftEnd(targetDate, shift);
+      const nextStart = computeShiftStart(next.date, nextShift);
+      if (newEnd && nextStart) {
+        const restMs = nextStart - newEnd;
+        if (restMs < MIN_REST_HOURS * 3_600_000) return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 export function correctHours(entries, shiftTypes, shiftMap, currentHours, target, preferredShift = null, lockedOffDates = new Set()) {
   const diff = currentHours - target;
   if (Math.abs(diff) <= 6) return entries;
@@ -740,6 +783,7 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
     for (const entry of offEntries) {
       if (deficit <= 0) break;
       if (lockedOffDates.has(entry.date)) continue;
+      if (!hasAdequateRest(entries, entry, shiftToAdd, shiftMap)) continue;
       entry.is_day_off = 0;
       entry.shift_type_id = shiftToAdd.id;
       deficit -= shiftToAdd.duration_hours;
