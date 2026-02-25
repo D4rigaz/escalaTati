@@ -8,8 +8,9 @@ export const EMENDADO_PAIRS = [
   ['Noturno', 'Manhã'],  // 19:00–07:00 + 07:00–13:00 = 18h
 ];
 
-const MIN_REST_HOURS        = 24;   // Fixo, não editável (regra 10)
-const MAX_CONSECUTIVE_HOURS = 18;   // Regra: máximo 18h consecutivas
+const MIN_REST_HOURS           = 24;  // Fixo, não editável (regra 10)
+const MAX_CONSECUTIVE_HOURS    = 18;  // Regra: máximo 18h consecutivas
+const MAX_CONSECUTIVE_WORK_DAYS = 6;  // Regra: máximo 6 dias de trabalho consecutivos
 const TARGET_HOURS          = 160;
 const DEFAULT_SHIFT_HOURS   = 12;   // Padrão esperado: plantão de 12 horas
 const SETOR_ADM             = 'Transporte Administrativo';
@@ -279,7 +280,10 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       }
 
       const remainingWorkDays = targetWorkDays - workDaysPlanned;
-      const actualWorkInWeek = Math.min(freeInWeek.length, Math.max(0, remainingWorkDays));
+      // Garante mínimo 1 folga/semana quando não há férias ou forced-off (Regra: máx 6 dias consecutivos)
+      const existingOffInWeek = vacInWeek.length + forcedOff.length;
+      const minOffNeeded = freeInWeek.length > 0 ? Math.max(0, 1 - existingOffInWeek) : 0;
+      const actualWorkInWeek = Math.min(freeInWeek.length - minOffNeeded, Math.max(0, remainingWorkDays));
       const actualOffInWeek = freeInWeek.length - actualWorkInWeek;
 
       const selectedOff = selectOffDays(freeInWeek, actualOffInWeek);
@@ -711,6 +715,39 @@ function computeShiftEnd(date, shift) {
 }
 
 /**
+ * Verifica se converter `targetEntry` em turno de trabalho criaria uma sequência
+ * de mais de MAX_CONSECUTIVE_WORK_DAYS dias consecutivos de trabalho.
+ * Opera sobre datas de calendário (sem depender de start_time).
+ * Retorna true se o limite seria excedido; false se é seguro converter.
+ */
+function wouldExceedConsecutive(allEntries, targetEntry) {
+  const targetDate = targetEntry.date;
+  const workDates = new Set(
+    allEntries.filter(e => !e.is_day_off && e.shift_type_id).map(e => e.date)
+  );
+
+  // Conta dias consecutivos de trabalho imediatamente antes de targetDate
+  let before = 0;
+  let cursor = new Date(targetDate + 'T12:00:00Z');
+  while (true) {
+    cursor = new Date(cursor.getTime() - 86_400_000);
+    if (workDates.has(cursor.toISOString().slice(0, 10))) before++;
+    else break;
+  }
+
+  // Conta dias consecutivos de trabalho imediatamente após targetDate
+  let after = 0;
+  cursor = new Date(targetDate + 'T12:00:00Z');
+  while (true) {
+    cursor = new Date(cursor.getTime() + 86_400_000);
+    if (workDates.has(cursor.toISOString().slice(0, 10))) after++;
+    else break;
+  }
+
+  return (before + 1 + after) > MAX_CONSECUTIVE_WORK_DAYS;
+}
+
+/**
  * Verifica se inserir `shift` na data de `targetEntry` respeita ≥24h de descanso
  * em relação aos turnos adjacentes já existentes em `allEntries` (in-memory).
  * Retorna true se é seguro converter; false caso contrário.
@@ -784,6 +821,7 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
       if (deficit <= 0) break;
       if (lockedOffDates.has(entry.date)) continue;
       if (!hasAdequateRest(entries, entry, shiftToAdd, shiftMap)) continue;
+      if (wouldExceedConsecutive(entries, entry)) continue;
       entry.is_day_off = 0;
       entry.shift_type_id = shiftToAdd.id;
       deficit -= shiftToAdd.duration_hours;
