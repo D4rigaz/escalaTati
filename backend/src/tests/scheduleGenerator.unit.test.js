@@ -74,4 +74,36 @@ describe('correctHours', () => {
     const converted = entries.filter(e => !e.is_day_off);
     expect(converted.length).toBeGreaterThan(5); // folgas boas foram convertidas
   });
+
+  it('não converte folga que criaria mais de 6 dias consecutivos de trabalho', () => {
+    // Turno sem start_time — wouldExceedConsecutive opera por data de calendário (independe de start_time)
+    const turno = { id: 1, name: 'Noturno', duration_hours: 12 };
+    const localShiftTypes = [turno];
+    const localShiftMap   = { 1: turno };
+
+    // 6 dias consecutivos de trabalho (Jan 1–6), folga no Jan 7, trabalho Jan 8
+    // Converter Jan 7 criaria 8 consecutivos (Jan 1–8) → deve ser ignorada
+    // Jan 9 e Jan 10 são folgas sem adjacência que exceda o limite → podem ser convertidas
+    const entries = [
+      { date: '2025-01-01', is_day_off: 0, shift_type_id: 1 },
+      { date: '2025-01-02', is_day_off: 0, shift_type_id: 1 },
+      { date: '2025-01-03', is_day_off: 0, shift_type_id: 1 },
+      { date: '2025-01-04', is_day_off: 0, shift_type_id: 1 },
+      { date: '2025-01-05', is_day_off: 0, shift_type_id: 1 },
+      { date: '2025-01-06', is_day_off: 0, shift_type_id: 1 }, // 6º consecutivo
+      { date: '2025-01-07', is_day_off: 1, shift_type_id: null }, // folga — converter criaria 8 consec.
+      { date: '2025-01-08', is_day_off: 0, shift_type_id: 1 },
+      { date: '2025-01-09', is_day_off: 1, shift_type_id: null }, // folga boa (antes: 1 consec., depois: 0)
+      { date: '2025-01-10', is_day_off: 1, shift_type_id: null }, // folga boa
+    ];
+    // currentHours = 7*12 = 84, target = 120 → deficit = 36h (até 3 folgas)
+
+    correctHours(entries, localShiftTypes, localShiftMap, 84, 120, turno);
+
+    const jan7 = entries.find(e => e.date === '2025-01-07');
+    expect(jan7.is_day_off).toBe(1); // NÃO convertida — criaria 8 consecutivos
+
+    const workDays = entries.filter(e => !e.is_day_off);
+    expect(workDays.length).toBeGreaterThan(7); // folgas boas convertidas
+  });
 });
