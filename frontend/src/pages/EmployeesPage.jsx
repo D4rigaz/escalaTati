@@ -33,7 +33,7 @@ export default function EmployeesPage() {
     if (!deleteTarget) return;
     try {
       await deleteEmployee(deleteTarget.id);
-      addToast({ type: 'success', title: 'Funcionário desativado', message: deleteTarget.name });
+      addToast({ type: 'success', title: 'Motorista desativado', message: deleteTarget.name });
     } catch (err) {
       addToast({ type: 'error', title: 'Erro', message: err.message });
     }
@@ -45,7 +45,7 @@ export default function EmployeesPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Funcionários</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Motoristas</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {employees.length} cadastrado{employees.length !== 1 ? 's' : ''}
           </p>
@@ -58,7 +58,7 @@ export default function EmployeesPage() {
           }}
         >
           <Plus size={16} />
-          Novo Funcionário
+          Novo Motorista
         </button>
       </div>
 
@@ -80,7 +80,7 @@ export default function EmployeesPage() {
         <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-2">
           <Users size={40} className="text-gray-300" />
           <p className="text-sm">
-            {search ? 'Nenhum funcionário encontrado' : 'Nenhum funcionário cadastrado'}
+            {search ? 'Nenhum motorista encontrado' : 'Nenhum motorista cadastrado'}
           </p>
           {!search && (
             <button
@@ -91,7 +91,7 @@ export default function EmployeesPage() {
               }}
             >
               <Plus size={16} />
-              Cadastrar primeiro funcionário
+              Cadastrar primeiro motorista
             </button>
           )}
         </div>
@@ -121,8 +121,8 @@ export default function EmployeesPage() {
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(v) => !v && setDeleteTarget(null)}
-        title="Desativar funcionário"
-        description={`Tem certeza que deseja desativar "${deleteTarget?.name}"? O funcionário não aparecerá em novas escalas.`}
+        title="Desativar motorista"
+        description={`Tem certeza que deseja desativar "${deleteTarget?.name}"? O motorista não aparecerá em novas escalas.`}
         confirmLabel="Desativar"
         onConfirm={handleDelete}
       />

@@ -119,10 +119,10 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
 
       if (isEdit) {
         await updateEmployee(employee.id, payload);
-        addToast({ type: 'success', title: 'Funcionário atualizado', message: data.name });
+        addToast({ type: 'success', title: 'Motorista atualizado', message: data.name });
       } else {
         await createEmployee(payload);
-        addToast({ type: 'success', title: 'Funcionário criado', message: data.name });
+        addToast({ type: 'success', title: 'Motorista criado', message: data.name });
       }
       onOpenChange(false);
       onSuccess?.();
@@ -138,12 +138,12 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
         <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
           <div className="flex items-center justify-between mb-5">
             <Dialog.Title className="text-lg font-bold text-gray-900">
-              {isEdit ? 'Editar Funcionário' : 'Novo Funcionário'}
+              {isEdit ? 'Editar Motorista' : 'Novo Motorista'}
             </Dialog.Title>
             <Dialog.Description className="sr-only">
               {isEdit
-                ? 'Edite os dados do funcionário, incluindo setores, turno preferencial, cor e férias.'
-                : 'Preencha os dados para cadastrar um novo funcionário.'}
+                ? 'Edite os dados do motorista, incluindo setores, turno preferencial, cor e férias.'
+                : 'Preencha os dados para cadastrar um novo motorista.'}
             </Dialog.Description>
             <Dialog.Close asChild>
               <button className="text-gray-400 hover:text-gray-600 transition-colors">

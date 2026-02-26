@@ -29,15 +29,15 @@ const openProps = { open: true, onOpenChange: vi.fn(), onSuccess: vi.fn() };
 // ─── Renderização ─────────────────────────────────────────────────────────────
 
 describe('EmployeeForm — renderização', () => {
-  it('exibe "Novo Funcionário" no modo criação (sem employee prop)', () => {
+  it('exibe "Novo Motorista" no modo criação (sem employee prop)', () => {
     render(<EmployeeForm {...openProps} />);
-    expect(screen.getByText('Novo Funcionário')).toBeInTheDocument();
+    expect(screen.getByText('Novo Motorista')).toBeInTheDocument();
   });
 
-  it('exibe "Editar Funcionário" no modo edição (com employee prop)', () => {
+  it('exibe "Editar Motorista" no modo edição (com employee prop)', () => {
     const employee = { id: 1, name: 'Ana', setores: ['Transporte Ambulância'], vacations: [] };
     render(<EmployeeForm {...openProps} employee={employee} />);
-    expect(screen.getByText('Editar Funcionário')).toBeInTheDocument();
+    expect(screen.getByText('Editar Motorista')).toBeInTheDocument();
   });
 
   it('botão submit exibe "Criar" no modo criação', () => {
@@ -72,13 +72,13 @@ describe('EmployeeForm — renderização', () => {
 
   it('não exibe conteúdo quando open=false', () => {
     render(<EmployeeForm open={false} onOpenChange={vi.fn()} />);
-    expect(screen.queryByText('Novo Funcionário')).not.toBeInTheDocument();
+    expect(screen.queryByText('Novo Motorista')).not.toBeInTheDocument();
   });
 
   it('Dialog.Description acessível no modo criação (sr-only)', () => {
     render(<EmployeeForm {...openProps} />);
     expect(
-      screen.getByText('Preencha os dados para cadastrar um novo funcionário.')
+      screen.getByText('Preencha os dados para cadastrar um novo motorista.')
     ).toBeInTheDocument();
   });
 
@@ -86,7 +86,7 @@ describe('EmployeeForm — renderização', () => {
     const employee = { id: 1, name: 'Ana', setores: ['Transporte Ambulância'], vacations: [] };
     render(<EmployeeForm {...openProps} employee={employee} />);
     expect(
-      screen.getByText(/Edite os dados do funcionário/)
+      screen.getByText(/Edite os dados do motorista/)
     ).toBeInTheDocument();
   });
 });
