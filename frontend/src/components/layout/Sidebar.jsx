@@ -3,7 +3,7 @@ import { Users, Calendar, Settings, Clock } from 'lucide-react';
 
 const navItems = [
   { to: '/', label: 'Escala', icon: Calendar, end: true },
-  { to: '/funcionarios', label: 'Funcionários', icon: Users },
+  { to: '/funcionarios', label: 'Motoristas', icon: Users },
   { to: '/configuracoes', label: 'Configurações', icon: Settings },
 ];
 

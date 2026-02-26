@@ -52,7 +52,7 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
         <thead>
           <tr className="bg-gray-50">
             <th className="sticky left-0 bg-gray-50 text-left px-3 py-2 font-semibold text-gray-600 border border-gray-200 min-w-[140px]">
-              Funcionário
+              Motorista
             </th>
             {dates.map(({ date, dayNum, dayLabel }) => {
               const isWeekend = [0, 6].includes(new Date(date).getDay());
