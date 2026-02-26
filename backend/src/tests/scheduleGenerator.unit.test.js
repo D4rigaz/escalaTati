@@ -184,9 +184,9 @@ describe('enforceDailyCoverage', () => {
     expect(warnings.some(w => w.type === 'sem_motorista' && w.date === '2025-01-10')).toBe(true);
   });
 
-  it('não força funcionário seg_sex a trabalhar no Domingo', () => {
-    const noturno = db.prepare("SELECT * FROM shift_types WHERE name = 'Noturno'").get();
-    // seg_sex employee com folga no Domingo (Jan 5, 2025 = Domingo)
+  it('força funcionário seg_sex no Domingo via passo 3 (emergência) quando não há dom_sab disponível', () => {
+    // Jan 5, 2025 = Domingo; único candidato é seg_sex
+    // Passo 1 e 2 ignoram seg_sex em fins de semana; passo 3 força com warning distinto
     const emp = db.prepare("INSERT INTO employees (name, cargo, work_schedule) VALUES ('Diana', 'Motorista', 'seg_sex')").run();
     const empId = emp.lastInsertRowid;
     db.prepare('INSERT INTO employee_sectors (employee_id, setor) VALUES (?, ?)').run(empId, 'Transporte Ambulância');
@@ -199,12 +199,39 @@ describe('enforceDailyCoverage', () => {
     const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
     const warnings = [];
 
-    // Jan 5, 2025 = Domingo; seg_sex não pode ser forçado
     enforceDailyCoverage(db, employees, sectorMap, shiftTypes, ['2025-01-05'], warnings);
 
+    // Passo 3: cobertura garantida mesmo sendo seg_sex
     const entry = getEntry(db, empId, '2025-01-05');
-    expect(entry.is_day_off).toBe(1); // não convertido
-    expect(warnings.some(w => w.type === 'sem_motorista')).toBe(true);
+    expect(entry.is_day_off).toBe(0); // convertido pelo passo 3
+    expect(warnings.some(w => w.type === 'sem_motorista_forcado_seg_sex')).toBe(true);
+    expect(warnings.some(w => w.type === 'sem_motorista')).toBe(false); // dia foi coberto
+  });
+
+  it('passo 3 não é acionado quando há dom_sab disponível no Sábado', () => {
+    // Sáb Jan 4, 2025: 1 seg_sex (passo 1/2 o ignora) + 1 dom_sab (passo 2 o pega)
+    const empSegSex = db.prepare("INSERT INTO employees (name, cargo, work_schedule) VALUES ('Eduardo', 'Motorista', 'seg_sex')").run();
+    const empDomSab = db.prepare("INSERT INTO employees (name, cargo, work_schedule) VALUES ('Fernanda', 'Motorista', 'dom_sab')").run();
+    for (const id of [empSegSex.lastInsertRowid, empDomSab.lastInsertRowid]) {
+      db.prepare('INSERT INTO employee_sectors (employee_id, setor) VALUES (?, ?)').run(id, 'Transporte Ambulância');
+      db.prepare('INSERT INTO employee_rest_rules (employee_id, min_rest_hours) VALUES (?, 24)').run(id);
+      insertEntry(db, { employee_id: id, date: '2025-01-04', is_day_off: 1, shift_type_id: null });
+    }
+
+    const allEmps = db.prepare('SELECT * FROM employees WHERE active = 1').all()
+      .map(e => ({ ...e, setores: ['Transporte Ambulância'] }));
+    const sectorMap = Object.fromEntries(allEmps.map(e => [e.id, ['Transporte Ambulância']]));
+    const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+    const warnings = [];
+
+    enforceDailyCoverage(db, allEmps, sectorMap, shiftTypes, ['2025-01-04'], warnings);
+
+    // dom_sab (Fernanda) deve ter sido escalada; seg_sex (Eduardo) não tocado
+    const entrySegSex = getEntry(db, empSegSex.lastInsertRowid, '2025-01-04');
+    const entryDomSab = getEntry(db, empDomSab.lastInsertRowid, '2025-01-04');
+    expect(entryDomSab.is_day_off).toBe(0); // Fernanda trabalha
+    expect(entrySegSex.is_day_off).toBe(1); // Eduardo preservado
+    expect(warnings.some(w => w.type === 'sem_motorista_forcado_seg_sex')).toBe(false);
   });
 
   it('não toca dias que já têm motorista escalado', () => {
