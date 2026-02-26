@@ -11,6 +11,7 @@ export const EMENDADO_PAIRS = [
 const MIN_REST_HOURS           = 24;  // Fixo, não editável (regra 10)
 const MAX_CONSECUTIVE_HOURS    = 18;  // Regra: máximo 18h consecutivas
 const MAX_CONSECUTIVE_WORK_DAYS = 6;  // Regra: máximo 6 dias de trabalho consecutivos
+const MIN_DAILY_COVERAGE        = 2;  // Regra 42: mínimo 2 motoristas por dia (issue #42)
 const TARGET_HOURS          = 160;
 const DEFAULT_SHIFT_HOURS   = 12;   // Padrão esperado: plantão de 12 horas
 const SETOR_ADM             = 'Transporte Administrativo';
@@ -658,13 +659,16 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
 }
 
 /**
- * Rule 19 (enforcement): Garante que todo dia do mês tem pelo menos 1 motorista.
+ * Rule 19/42 (enforcement): Garante cobertura mínima de MIN_DAILY_COVERAGE motoristas por dia.
  * @exported para testes unitários
+ * Loop por iteração até filled === MIN_DAILY_COVERAGE, re-buscando folgas a cada volta.
  * Passo 1: converte folga respeitando restrições de descanso e work_schedule=seg_sex.
  * Passo 2 (fallback): ignora MIN_REST_HOURS e consecutivos; ainda respeita seg_sex.
+ *   Emite sem_motorista_forcado (1º) ou segundo_motorista_forcado (2º+).
  * Passo 3 (emergência): força até candidatos seg_sex em Sáb/Dom quando não há outro.
  *   Emite warning sem_motorista_forcado_seg_sex para rastreabilidade.
- * Emite sem_motorista apenas quando não há nenhuma folga disponível.
+ * Emite sem_motorista (filled=0) ou cobertura_minima_insuficiente (filled>0 mas <MIN)
+ *   quando não há candidatos disponíveis.
  */
 export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings) {
   const defaultShift =
@@ -690,109 +694,136 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
   };
 
   for (const date of dates) {
-    const row = db
+    const initialCount = db
       .prepare(
         `SELECT COUNT(*) as c FROM schedule_entries
          WHERE date = ? AND is_day_off = 0
            AND employee_id IN (SELECT id FROM employees WHERE active = 1)`
       )
-      .get(date);
-    if (row.c > 0) continue;
+      .get(date).c;
+    if (initialCount >= MIN_DAILY_COVERAGE) continue;
 
     const dow = new Date(date + 'T12:00:00').getDay();
     const isWeekend = dow === 0 || dow === 6;
-
-    // Candidatos: folgas não-bloqueadas e não-férias neste dia
-    const folgas = db
-      .prepare(
-        `SELECT se.id, se.employee_id FROM schedule_entries se
-         WHERE se.date = ? AND se.is_day_off = 1 AND se.is_locked = 0
-           AND (se.notes IS NULL OR se.notes != 'Férias')
-           AND se.employee_id IN (SELECT id FROM employees WHERE active = 1)`
-      )
-      .all(date);
-
-    if (folgas.length === 0) {
-      warnings.push({ type: 'sem_motorista', date, message: `${date}: nenhum motorista escalado` });
-      continue;
-    }
-
-    // Ordena candidatos por mais dias desde o último trabalho (mais descansado primeiro)
-    const candidates = folgas
-      .map((f) => {
-        const emp = employees.find((e) => e.id === f.employee_id);
-        if (!emp) return null;
-        const lastWork = db
-          .prepare(
-            `SELECT date FROM schedule_entries
-             WHERE employee_id = ? AND date < ? AND is_day_off = 0
-             ORDER BY date DESC LIMIT 1`
-          )
-          .get(emp.id, date);
-        const daysSince = lastWork
-          ? Math.round(
-              (new Date(date + 'T12:00:00Z') - new Date(lastWork.date + 'T12:00:00Z')) /
-                86_400_000
-            )
-          : 999;
-        return { folgaId: f.id, emp, daysSince };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.daysSince - a.daysSince);
-
     const startDate = dates[0];
     const endDate   = dates[dates.length - 1];
 
-    // Passo 1: com restrições de descanso e cap de horas (respeita seg_sex)
-    let assigned = false;
-    for (const { folgaId, emp } of candidates) {
-      if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
-      if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-      const shift = getShiftForEmp(emp);
-      if (!canAssignShift(db, emp.id, date, shift)) continue;
-      db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
-        .run(shift.id, folgaId);
-      assigned = true;
-      break;
-    }
-    if (assigned) continue;
+    let filled = initialCount;
 
-    // Passo 2: forçado — ignora restrições de descanso e consecutivos (respeita seg_sex e cap)
-    let forced = false;
-    for (const { folgaId, emp } of candidates) {
-      if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
-      if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-      const shift = getShiftForEmp(emp);
-      db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
-        .run(shift.id, folgaId);
-      warnings.push({
-        type: 'sem_motorista_forcado',
-        date,
-        employee: emp.name,
-        message: `${date}: cobertura diária forçada para ${emp.name} (restrições de descanso ignoradas)`,
-      });
-      forced = true;
-      break;
-    }
-    if (forced) continue;
+    while (filled < MIN_DAILY_COVERAGE) {
+      // Re-busca folgas a cada iteração — candidatos mudam após cada atribuição
+      const folgas = db
+        .prepare(
+          `SELECT se.id, se.employee_id FROM schedule_entries se
+           WHERE se.date = ? AND se.is_day_off = 1 AND se.is_locked = 0
+             AND (se.notes IS NULL OR se.notes != 'Férias')
+             AND se.employee_id IN (SELECT id FROM employees WHERE active = 1)`
+        )
+        .all(date);
 
-    // Passo 3 (emergência): força candidato seg_sex em Sáb/Dom — equipe insuficiente de dom_sab
-    for (const { folgaId, emp } of candidates) {
-      if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-      const shift = getShiftForEmp(emp);
-      db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
-        .run(shift.id, folgaId);
-      warnings.push({
-        type: 'sem_motorista_forcado_seg_sex',
-        date,
-        employee: emp.name,
-        message: `${date}: cobertura de emergência para ${emp.name} (seg_sex forçado em fim de semana — equipe insuficiente)`,
-      });
-      forced = true;
-      break;
-    }
-    if (!forced) {
-      warnings.push({ type: 'sem_motorista', date, message: `${date}: nenhum motorista escalado` });
+      if (folgas.length === 0) {
+        if (filled === 0) {
+          warnings.push({ type: 'sem_motorista', date, message: `${date}: nenhum motorista escalado` });
+        } else {
+          warnings.push({
+            type: 'cobertura_minima_insuficiente',
+            date,
+            message: `${date}: apenas ${filled}/${MIN_DAILY_COVERAGE} motoristas — sem candidatos disponíveis`,
+          });
+        }
+        break;
+      }
+
+      // Ordena candidatos por mais dias desde o último trabalho (mais descansado primeiro)
+      const candidates = folgas
+        .map((f) => {
+          const emp = employees.find((e) => e.id === f.employee_id);
+          if (!emp) return null;
+          const lastWork = db
+            .prepare(
+              `SELECT date FROM schedule_entries
+               WHERE employee_id = ? AND date < ? AND is_day_off = 0
+               ORDER BY date DESC LIMIT 1`
+            )
+            .get(emp.id, date);
+          const daysSince = lastWork
+            ? Math.round(
+                (new Date(date + 'T12:00:00Z') - new Date(lastWork.date + 'T12:00:00Z')) /
+                  86_400_000
+              )
+            : 999;
+          return { folgaId: f.id, emp, daysSince };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.daysSince - a.daysSince);
+
+      const isSecond = filled > 0;
+
+      // Passo 1: com restrições de descanso e cap de horas (respeita seg_sex)
+      let assigned = false;
+      for (const { folgaId, emp } of candidates) {
+        if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        const shift = getShiftForEmp(emp);
+        if (!canAssignShift(db, emp.id, date, shift)) continue;
+        db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
+          .run(shift.id, folgaId);
+        filled++;
+        assigned = true;
+        break;
+      }
+      if (assigned) continue;
+
+      // Passo 2: forçado — ignora restrições de descanso e consecutivos (respeita seg_sex e cap)
+      let forced = false;
+      for (const { folgaId, emp } of candidates) {
+        if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        const shift = getShiftForEmp(emp);
+        db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
+          .run(shift.id, folgaId);
+        warnings.push({
+          type: isSecond ? 'segundo_motorista_forcado' : 'sem_motorista_forcado',
+          date,
+          employee: emp.name,
+          message: isSecond
+            ? `${date}: segundo motorista forçado para ${emp.name} (cobertura mínima ${MIN_DAILY_COVERAGE}/dia)`
+            : `${date}: cobertura diária forçada para ${emp.name} (restrições de descanso ignoradas)`,
+        });
+        filled++;
+        forced = true;
+        break;
+      }
+      if (forced) continue;
+
+      // Passo 3 (emergência): força candidato seg_sex em Sáb/Dom — equipe insuficiente de dom_sab
+      for (const { folgaId, emp } of candidates) {
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        const shift = getShiftForEmp(emp);
+        db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
+          .run(shift.id, folgaId);
+        warnings.push({
+          type: 'sem_motorista_forcado_seg_sex',
+          date,
+          employee: emp.name,
+          message: `${date}: cobertura de emergência para ${emp.name} (seg_sex forçado em fim de semana — equipe insuficiente)`,
+        });
+        filled++;
+        forced = true;
+        break;
+      }
+      if (!forced) {
+        if (filled === 0) {
+          warnings.push({ type: 'sem_motorista', date, message: `${date}: nenhum motorista escalado` });
+        } else {
+          warnings.push({
+            type: 'cobertura_minima_insuficiente',
+            date,
+            message: `${date}: apenas ${filled}/${MIN_DAILY_COVERAGE} motoristas — equipe insuficiente`,
+          });
+        }
+        break;
+      }
     }
   }
 }
