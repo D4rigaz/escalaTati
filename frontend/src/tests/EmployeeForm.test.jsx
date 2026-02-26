@@ -74,6 +74,21 @@ describe('EmployeeForm — renderização', () => {
     render(<EmployeeForm open={false} onOpenChange={vi.fn()} />);
     expect(screen.queryByText('Novo Funcionário')).not.toBeInTheDocument();
   });
+
+  it('Dialog.Description acessível no modo criação (sr-only)', () => {
+    render(<EmployeeForm {...openProps} />);
+    expect(
+      screen.getByText('Preencha os dados para cadastrar um novo funcionário.')
+    ).toBeInTheDocument();
+  });
+
+  it('Dialog.Description acessível no modo edição (sr-only)', () => {
+    const employee = { id: 1, name: 'Ana', setores: ['Transporte Ambulância'], vacations: [] };
+    render(<EmployeeForm {...openProps} employee={employee} />);
+    expect(
+      screen.getByText(/Edite os dados do funcionário/)
+    ).toBeInTheDocument();
+  });
 });
 
 // ─── toggleSetor — lógica de exclusividade ADM ────────────────────────────────
