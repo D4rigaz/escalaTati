@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { isValidEmendado, correctHours } from '../services/scheduleGenerator.js';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { isValidEmendado, correctHours, enforceDailyCoverage } from '../services/scheduleGenerator.js';
+import { freshDb, createEmployee } from './helpers.js';
 
 describe('isValidEmendado', () => {
   it('permite Tarde → Noturno', () => expect(isValidEmendado('Tarde', 'Noturno')).toBe(true));
@@ -105,5 +106,121 @@ describe('correctHours', () => {
 
     const workDays = entries.filter(e => !e.is_day_off);
     expect(workDays.length).toBeGreaterThan(7); // folgas boas convertidas
+  });
+});
+
+// ─── enforceDailyCoverage ─────────────────────────────────────────────────────
+
+describe('enforceDailyCoverage', () => {
+  let db;
+
+  beforeEach(() => { db = freshDb(); });
+
+  // Helper: insere entrada de escala diretamente no DB
+  function insertEntry(db, { employee_id, date, is_day_off, shift_type_id = null, is_locked = 0, notes = null }) {
+    db.prepare(
+      'INSERT INTO schedule_entries (employee_id, date, is_day_off, shift_type_id, is_locked, notes) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(employee_id, date, is_day_off, shift_type_id, is_locked, notes);
+  }
+
+  // Helper: retorna entry do DB para (employee_id, date)
+  function getEntry(db, employee_id, date) {
+    return db.prepare('SELECT * FROM schedule_entries WHERE employee_id = ? AND date = ?').get(employee_id, date);
+  }
+
+  it('converte folga em turno quando dia não tem motorista (passo 1 — sem forçar)', () => {
+    // Sem entradas adjacentes → prevEntry e nextEntry são null → canAssignShift retorna true
+    const emp = createEmployee(db, { name: 'Ana', setor: 'Transporte Ambulância' });
+    insertEntry(db, { employee_id: emp.id, date: '2025-01-05', is_day_off: 1, shift_type_id: null });
+
+    const employees = [{ ...emp, setores: ['Transporte Ambulância'] }];
+    const sectorMap = { [emp.id]: ['Transporte Ambulância'] };
+    const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+    const warnings = [];
+
+    enforceDailyCoverage(db, employees, sectorMap, shiftTypes, ['2025-01-05'], warnings);
+
+    const entry = getEntry(db, emp.id, '2025-01-05');
+    expect(entry.is_day_off).toBe(0);
+    expect(entry.shift_type_id).toBeTruthy();
+    expect(warnings).toHaveLength(0); // cobertura sem force: sem warning
+  });
+
+  it('emite warning sem_motorista_forcado quando único candidato viola restrições de descanso', () => {
+    // Turnos com start_time para que canAssignShift rejeite por descanso insuficiente
+    // Funcionário com poucas horas (<160h) para não ser bloqueado pelo cap
+    const noturno = db.prepare("SELECT * FROM shift_types WHERE name = 'Noturno'").get();
+    const emp = createEmployee(db, { name: 'Bruno', setor: 'Transporte Ambulância' });
+
+    // Apenas 1 dia de trabalho anterior (12h < 160h cap) + folga adjacente
+    // Jan 4 noturno (termina Jan 5 07:00); Jan 5 folga — 12h rest → canAssign rejeita (< 24h)
+    insertEntry(db, { employee_id: emp.id, date: '2025-01-04', is_day_off: 0, shift_type_id: noturno.id });
+    insertEntry(db, { employee_id: emp.id, date: '2025-01-05', is_day_off: 1, shift_type_id: null });
+
+    const employees = [{ ...emp, setores: ['Transporte Ambulância'] }];
+    const sectorMap = { [emp.id]: ['Transporte Ambulância'] };
+    const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+    const warnings = [];
+
+    enforceDailyCoverage(db, employees, sectorMap, shiftTypes, ['2025-01-05'], warnings);
+
+    // Deve ter sido forçado — warning emitido
+    expect(warnings.some(w => w.type === 'sem_motorista_forcado')).toBe(true);
+    // E o dia deve ter sido coberto mesmo assim
+    const entry = getEntry(db, emp.id, '2025-01-05');
+    expect(entry.is_day_off).toBe(0);
+  });
+
+  it('emite warning sem_motorista quando não há nenhuma folga disponível no dia', () => {
+    const emp = createEmployee(db, { name: 'Carlos', setor: 'Transporte Ambulância' });
+    // Nenhuma entry no DB para Jan 10 — folgas.length = 0
+    const employees = [{ ...emp, setores: ['Transporte Ambulância'] }];
+    const sectorMap = { [emp.id]: ['Transporte Ambulância'] };
+    const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+    const warnings = [];
+
+    enforceDailyCoverage(db, employees, sectorMap, shiftTypes, ['2025-01-10'], warnings);
+
+    expect(warnings.some(w => w.type === 'sem_motorista' && w.date === '2025-01-10')).toBe(true);
+  });
+
+  it('não força funcionário seg_sex a trabalhar no Domingo', () => {
+    const noturno = db.prepare("SELECT * FROM shift_types WHERE name = 'Noturno'").get();
+    // seg_sex employee com folga no Domingo (Jan 5, 2025 = Domingo)
+    const emp = db.prepare("INSERT INTO employees (name, cargo, work_schedule) VALUES ('Diana', 'Motorista', 'seg_sex')").run();
+    const empId = emp.lastInsertRowid;
+    db.prepare('INSERT INTO employee_sectors (employee_id, setor) VALUES (?, ?)').run(empId, 'Transporte Ambulância');
+    db.prepare('INSERT INTO employee_rest_rules (employee_id, min_rest_hours) VALUES (?, 24)').run(empId);
+    insertEntry(db, { employee_id: empId, date: '2025-01-05', is_day_off: 1, shift_type_id: null });
+
+    const empObj = db.prepare('SELECT * FROM employees WHERE id = ?').get(empId);
+    const employees = [{ ...empObj, setores: ['Transporte Ambulância'] }];
+    const sectorMap = { [empId]: ['Transporte Ambulância'] };
+    const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+    const warnings = [];
+
+    // Jan 5, 2025 = Domingo; seg_sex não pode ser forçado
+    enforceDailyCoverage(db, employees, sectorMap, shiftTypes, ['2025-01-05'], warnings);
+
+    const entry = getEntry(db, empId, '2025-01-05');
+    expect(entry.is_day_off).toBe(1); // não convertido
+    expect(warnings.some(w => w.type === 'sem_motorista')).toBe(true);
+  });
+
+  it('não toca dias que já têm motorista escalado', () => {
+    const noturno = db.prepare("SELECT * FROM shift_types WHERE name = 'Noturno'").get();
+    const emp = createEmployee(db, { name: 'Eva', setor: 'Transporte Ambulância' });
+    insertEntry(db, { employee_id: emp.id, date: '2025-01-15', is_day_off: 0, shift_type_id: noturno.id });
+
+    const employees = [{ ...emp, setores: ['Transporte Ambulância'] }];
+    const sectorMap = { [emp.id]: ['Transporte Ambulância'] };
+    const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+    const warnings = [];
+
+    enforceDailyCoverage(db, employees, sectorMap, shiftTypes, ['2025-01-15'], warnings);
+
+    expect(warnings).toHaveLength(0);
+    const entry = getEntry(db, emp.id, '2025-01-15');
+    expect(entry.is_day_off).toBe(0); // permanece trabalho
   });
 });
