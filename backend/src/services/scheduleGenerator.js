@@ -660,10 +660,11 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
 /**
  * Rule 19 (enforcement): Garante que todo dia do mês tem pelo menos 1 motorista.
  * @exported para testes unitários
- * Passa 1: converte folga de candidato elegível respeitando restrições de descanso.
- * Passo 2 (fallback): força a conversão ignorando MIN_REST_HOURS e dias consecutivos.
- * Respeita work_schedule=seg_sex mesmo no passo forçado.
- * Emite warning quando a cobertura foi forçada ou quando é impossível.
+ * Passo 1: converte folga respeitando restrições de descanso e work_schedule=seg_sex.
+ * Passo 2 (fallback): ignora MIN_REST_HOURS e consecutivos; ainda respeita seg_sex.
+ * Passo 3 (emergência): força até candidatos seg_sex em Sáb/Dom quando não há outro.
+ *   Emite warning sem_motorista_forcado_seg_sex para rastreabilidade.
+ * Emite sem_motorista apenas quando não há nenhuma folga disponível.
  */
 export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings) {
   const defaultShift =
@@ -699,6 +700,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
     if (row.c > 0) continue;
 
     const dow = new Date(date + 'T12:00:00').getDay();
+    const isWeekend = dow === 0 || dow === 6;
 
     // Candidatos: folgas não-bloqueadas e não-férias neste dia
     const folgas = db
@@ -741,10 +743,10 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
     const startDate = dates[0];
     const endDate   = dates[dates.length - 1];
 
-    // Passo 1: com restrições de descanso e cap de horas
+    // Passo 1: com restrições de descanso e cap de horas (respeita seg_sex)
     let assigned = false;
     for (const { folgaId, emp } of candidates) {
-      if (emp.work_schedule === 'seg_sex' && (dow === 0 || dow === 6)) continue;
+      if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
       if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
       const shift = getShiftForEmp(emp);
       if (!canAssignShift(db, emp.id, date, shift)) continue;
@@ -755,10 +757,10 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
     }
     if (assigned) continue;
 
-    // Passo 2: forçado — ignora restrições de descanso e consecutivos, mantém cap de horas
+    // Passo 2: forçado — ignora restrições de descanso e consecutivos (respeita seg_sex e cap)
     let forced = false;
     for (const { folgaId, emp } of candidates) {
-      if (emp.work_schedule === 'seg_sex' && (dow === 0 || dow === 6)) continue;
+      if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
       if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
       const shift = getShiftForEmp(emp);
       db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
@@ -768,6 +770,23 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
         date,
         employee: emp.name,
         message: `${date}: cobertura diária forçada para ${emp.name} (restrições de descanso ignoradas)`,
+      });
+      forced = true;
+      break;
+    }
+    if (forced) continue;
+
+    // Passo 3 (emergência): força candidato seg_sex em Sáb/Dom — equipe insuficiente de dom_sab
+    for (const { folgaId, emp } of candidates) {
+      if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+      const shift = getShiftForEmp(emp);
+      db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
+        .run(shift.id, folgaId);
+      warnings.push({
+        type: 'sem_motorista_forcado_seg_sex',
+        date,
+        employee: emp.name,
+        message: `${date}: cobertura de emergência para ${emp.name} (seg_sex forçado em fim de semana — equipe insuficiente)`,
       });
       forced = true;
       break;
