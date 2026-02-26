@@ -140,6 +140,11 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
             <Dialog.Title className="text-lg font-bold text-gray-900">
               {isEdit ? 'Editar Funcionário' : 'Novo Funcionário'}
             </Dialog.Title>
+            <Dialog.Description className="sr-only">
+              {isEdit
+                ? 'Edite os dados do funcionário, incluindo setores, turno preferencial, cor e férias.'
+                : 'Preencha os dados para cadastrar um novo funcionário.'}
+            </Dialog.Description>
             <Dialog.Close asChild>
               <button className="text-gray-400 hover:text-gray-600 transition-colors">
                 <X size={20} />
