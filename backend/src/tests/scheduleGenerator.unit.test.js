@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { isValidEmendado, correctHours, enforceDailyCoverage } from '../services/scheduleGenerator.js';
+import { isValidEmendado, correctHours, enforceDailyCoverage, getWeekType } from '../services/scheduleGenerator.js';
 import { freshDb, createEmployee } from './helpers.js';
 
 describe('isValidEmendado', () => {
@@ -366,5 +366,32 @@ describe('enforceDailyCoverage', () => {
     expect(getEntry(db, emp2.id, '2025-01-08').is_day_off).toBe(1); // Marta em férias intocada
     expect(warnings.some(w => w.type === 'cobertura_minima_insuficiente' && w.date === '2025-01-08')).toBe(true);
     expect(warnings.some(w => w.type === 'sem_motorista')).toBe(false);
+  });
+});
+
+describe('getWeekType', () => {
+  it('fase 1, mês 1, semana 0 → 36h', () => expect(getWeekType(1, 1, 0)).toBe('36h'));
+  it('fase 1, mês 1, semana 1 → 42h', () => expect(getWeekType(1, 1, 1)).toBe('42h'));
+  it('fase 1, mês 1, semana 2 → 42h', () => expect(getWeekType(1, 1, 2)).toBe('42h'));
+  it('fase 1, mês 1, semana 3 → 36h', () => expect(getWeekType(1, 1, 3)).toBe('36h'));
+
+  it('fase 2, mês 1, semana 0 → 42h', () => expect(getWeekType(2, 1, 0)).toBe('42h'));
+  it('fase 2, mês 1, semana 2 → 36h', () => expect(getWeekType(2, 1, 2)).toBe('36h'));
+
+  it('fase 3, mês 1, semana 1 → 36h', () => expect(getWeekType(3, 1, 1)).toBe('36h'));
+
+  it('weekIndex >= 4 é clamped em 3', () => {
+    expect(getWeekType(1, 1, 4)).toBe(getWeekType(1, 1, 3));
+    expect(getWeekType(1, 1, 5)).toBe(getWeekType(1, 1, 3));
+  });
+
+  it('ciclo fecha após 3 meses: fase 1 mês 4 == fase 1 mês 1', () => {
+    expect(getWeekType(1, 4, 0)).toBe(getWeekType(1, 1, 0));
+    expect(getWeekType(1, 4, 1)).toBe(getWeekType(1, 1, 1));
+  });
+
+  it('fase 1 mês 2: motorista está no 2º mês do ciclo → patterns[1]', () => {
+    expect(getWeekType(1, 2, 0)).toBe('42h');
+    expect(getWeekType(1, 2, 2)).toBe('36h');
   });
 });

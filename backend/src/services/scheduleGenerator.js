@@ -31,6 +31,23 @@ export function isValidEmendado(prevShiftName, nextShiftName) {
 }
 
 /**
+ * Retorna o label contábil CLT da semana para um motorista.
+ * @param {number} cycleMonth - Fase do ciclo do motorista (1, 2 ou 3).
+ * @param {number} genMonth   - Mês da geração (1–12).
+ * @param {number} weekIndex  - Índice da semana no mês (0-based, clamped em 3).
+ * @returns {'36h' | '42h'}
+ */
+export function getWeekType(cycleMonth, genMonth, weekIndex) {
+  const patterns = [
+    ['36h', '42h', '42h', '36h'],  // fase 1
+    ['42h', '42h', '36h', '42h'],  // fase 2
+    ['42h', '36h', '42h', '42h'],  // fase 3
+  ];
+  const actualCycle = ((genMonth - 1 + cycleMonth - 1) % 3);
+  return patterns[actualCycle][Math.min(weekIndex, 3)];
+}
+
+/**
  * Main schedule generation algorithm (greedy + correction step)
  * Target: 160h/month per employee
  */
@@ -88,7 +105,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
     const result = runTransaction(() => {
       return generateForEmployee(
         db, employee, shiftTypes, shiftMap, dates,
-        overwriteLocked, warnings, allVacationDates
+        overwriteLocked, warnings, allVacationDates, month
       );
     });
     results.push(result);
@@ -111,7 +128,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   return { results, warnings };
 }
 
-function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates) {
+function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth) {
   const rules = db
     .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
     .get(employee.id) || { min_rest_hours: MIN_REST_HOURS, preferred_shift_id: null };
@@ -211,8 +228,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         lastShiftName = null;
       }
 
-      // Ciclo leve/pesada: 0→leve(3), 1→pesada(4), 2→pesada(4)
-      const maxTurnosNaSemana = wi % 3 === 0 ? 3 : 4;
+      const maxTurnosNaSemana = getWeekType(employee.cycle_month ?? 1, genMonth, wi) === '36h' ? 3 : 4;
       const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
       const actualOffInWeek = freeInWeek.length - Math.max(0, maxWorkInWeek);
 
@@ -251,8 +267,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     }
   } else {
     // Ambulância / Hemodiálise — plantão 12h, meta 160h/mês
-    const targetWorkDays = Math.round(remainingHours / baseShiftHours);
-    let workDaysPlanned = 0;
+    // Não-ADM: sempre 3 plantões/semana (label 36h/42h é apenas contábil CLT — correctHours afina)
 
     for (const week of weeks) {
       const vacInWeek = week.filter((d) => vacationDatesForEmp.has(d) && !lockedDates.has(d));
@@ -280,11 +295,10 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         lastShiftName = null;
       }
 
-      const remainingWorkDays = targetWorkDays - workDaysPlanned;
       // Garante mínimo 1 folga/semana quando não há férias ou forced-off (Regra: máx 6 dias consecutivos)
       const existingOffInWeek = vacInWeek.length + forcedOff.length;
       const minOffNeeded = freeInWeek.length > 0 ? Math.max(0, 1 - existingOffInWeek) : 0;
-      const actualWorkInWeek = Math.min(freeInWeek.length - minOffNeeded, Math.max(0, remainingWorkDays));
+      const actualWorkInWeek = Math.min(freeInWeek.length - minOffNeeded, 3);
       const actualOffInWeek = freeInWeek.length - actualWorkInWeek;
 
       const selectedOff = selectOffDays(freeInWeek, actualOffInWeek);
@@ -307,7 +321,6 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
 
           lastShiftEnd = computeShiftEnd(date, shift);
           lastShiftName = shift.name;
-          workDaysPlanned++;
         } else {
           entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
           consecutiveHours = 0;
