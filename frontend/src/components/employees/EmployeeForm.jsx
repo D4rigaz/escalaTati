@@ -34,6 +34,7 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
       name: '',
       work_schedule: 'dom_sab',
       color: '#6B7280',
+      cycle_month: '1',
       preferred_shift_id: '',
       notes: '',
     },
@@ -50,6 +51,7 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
         name: employee?.name ?? '',
         work_schedule: employee?.work_schedule ?? 'dom_sab',
         color: employee?.color ?? '#6B7280',
+        cycle_month: String(employee?.cycle_month ?? 1),
         preferred_shift_id: employee?.restRules?.preferred_shift_id ?? '',
         notes: employee?.restRules?.notes ?? '',
       });
@@ -111,6 +113,7 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
         setores: selectedSetores,
         work_schedule: data.work_schedule,
         color: data.color,
+        cycle_month: parseInt(data.cycle_month),
         restRules: {
           preferred_shift_id: data.preferred_shift_id ? parseInt(data.preferred_shift_id) : null,
           notes: data.notes || null,
@@ -189,6 +192,19 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
                   <option value="seg_sex">Segunda a Sexta</option>
                 </select>
               </div>
+            </div>
+
+            {/* Ciclo CLT */}
+            <div>
+              <label className="label">Ciclo CLT</label>
+              <select className="input" {...register('cycle_month')}>
+                <option value="1">Mês 1 — 36/42/42/36h</option>
+                <option value="2">Mês 2 — 42/42/36/42h</option>
+                <option value="3">Mês 3 — 42/36/42/42h</option>
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                Define a fase do ciclo de 3 meses (média 40h/sem pela CLT)
+              </p>
             </div>
 
             {/* Setores */}
