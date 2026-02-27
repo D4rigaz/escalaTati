@@ -4,6 +4,36 @@ import { generateSchedule } from '../services/scheduleGenerator.js';
 
 const router = Router();
 
+// GET /api/schedules/generations[?month=&year=]
+router.get('/generations', (req, res) => {
+  const db = getDb();
+  const { month, year } = req.query;
+
+  let sql = 'SELECT id, month, year, generated_at, params_json FROM schedule_generations';
+  const params = [];
+
+  if (month && year) {
+    sql += ' WHERE month = ? AND year = ?';
+    params.push(Number(month), Number(year));
+  } else if (month) {
+    sql += ' WHERE month = ?';
+    params.push(Number(month));
+  } else if (year) {
+    sql += ' WHERE year = ?';
+    params.push(Number(year));
+  }
+
+  sql += ' ORDER BY id DESC';
+
+  const rows = db.prepare(sql).all(...params);
+  const generations = rows.map(r => ({
+    ...r,
+    params_json: JSON.parse(r.params_json),
+  }));
+
+  res.json(generations);
+});
+
 // GET /api/schedules?month=X&year=X
 router.get('/', (req, res) => {
   const { month, year } = req.query;
