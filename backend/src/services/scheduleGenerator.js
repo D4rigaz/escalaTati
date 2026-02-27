@@ -123,7 +123,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   // Log generation
   db.prepare(
     'INSERT INTO schedule_generations (month, year, params_json) VALUES (?, ?, ?)'
-  ).run(month, year, JSON.stringify({ overwriteLocked, employeeCount: employees.length }));
+  ).run(month, year, JSON.stringify({ overwriteLocked, employeeCount: employees.length, warnings, results }));
 
   return { results, warnings };
 }
@@ -364,7 +364,12 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     });
   }
 
-  return { employee: employee.name, hours: finalHours };
+  const weekClassifications = weeks.map((_, wi) => ({
+    weekIndex: wi,
+    type: getWeekType(employee.cycle_month ?? 1, genMonth, wi),
+  }));
+
+  return { employee: employee.name, hours: finalHours, weekClassifications };
 }
 
 /**
