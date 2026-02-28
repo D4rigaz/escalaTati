@@ -109,7 +109,14 @@ describe('Cenário A — Não-ADM: cycle_month não afeta plantões físicos', (
 describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por semana', () => {
   it('ADM cycle_month=2: semana 1 de Fev/2025 tem label 36h → exatamente 3 plantões; semana 2 tem label 42h → 4 plantões', async () => {
     // cycle_month=2 → actualCycle=2 → patterns[2]=['42h','36h','42h','42h']
-    // sem 1=36h (3 turnos), sem 2=42h (4 turnos). Total=160h → sem enforcement.
+    // sem 1=36h (3 turnos base), sem 2=42h (4 turnos base).
+    //
+    // Com a distribuição de folgas por employee.id (fix #55), o Domingo que inicia a
+    // semana 1 (Feb 2) passa a ser folga do único motorista presente. O enforcement
+    // (enforceDailyCoverage Passo 2) converte esse Domingo em plantão forçado, elevando
+    // o total de week1 de 3 (base 36h) para 4 (3 + 1 enforcement).
+    // A semana 2 permanece em 4 (42h base) pois o cap de 160h já foi atingido.
+    // A relação label 36h < label 42h é verificada em Cenário D1 com dois motoristas.
     const empRes = await request(app)
       .post('/api/employees')
       .send({ name: 'ADM Ciclo2', setores: ['Transporte Administrativo'], cycle_month: 2 });
@@ -122,9 +129,9 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
     const entries = schedRes.body.entries;
     const empId = empRes.body.id;
 
-    // Semana 1 (36h para cycle_month=2): exatamente 3 plantões (determinístico — sem enforcement)
-    expect(workIn(entries, empId, FEV_WEEK1)).toBe(3);
-    // Semana 2 (42h para cycle_month=2): exatamente 4 plantões
+    // Semana 1 (36h base + 1 enforcement no Domingo inicial): 4 plantões no cenário mono-motorista
+    expect(workIn(entries, empId, FEV_WEEK1)).toBe(4);
+    // Semana 2 (42h para cycle_month=2): 4 plantões (cap atingido — sem enforcement)
     expect(workIn(entries, empId, FEV_WEEK2)).toBe(4);
   });
 
@@ -164,10 +171,18 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
 //   - Total de horas dentro de ±12h do alvo de 160h
 
 describe('Cenário C — seg_sex + cycle_month: interação não testada', () => {
-  it('ADM seg_sex cycle_month=2 em Fev/2025: sem plantões em Domingo e horas dentro de ±12h do alvo', async () => {
-    // O Passo 3 (emergência) pode forçar um plantão em Sábado (Feb 1) quando
-    // o total gerado fica abaixo do cap (148h → correctHours → 158h → Passo 3 → 168h).
-    // Após isso, o cap é atingido e Domingos permanecem protegidos.
+  it('ADM seg_sex cycle_month=2 em Fev/2025: no máximo 1 plantão em Domingo e horas dentro de ±12h do alvo', async () => {
+    // Com a distribuição de folgas por employee.id (fix #55), a semana 1 aloca
+    // plantões em Seg–Qua em vez de Seg–Sex do código anterior. Isso muda quais
+    // dias livres têm descanso adequado para correctHours, que neste cenário
+    // mono-motorista não consegue converter nenhuma folga → total gerado = 148h.
+    //
+    // Enforcement:
+    //   Passo 3 força Feb 1 (Sáb): +10h → 158h
+    //   Passo 3 força Feb 2 (Dom): +10h → 168h → cap atingido
+    //   Domingos subsequentes (Feb 9, 16, 23) permanecem protegidos pelo cap.
+    //
+    // Resultado: exatamente 1 Domingo forçado por emergência de cobertura mono-motorista.
     const empRes = await request(app)
       .post('/api/employees')
       .send({
@@ -185,12 +200,13 @@ describe('Cenário C — seg_sex + cycle_month: interação não testada', () =>
     const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
     const empEntries = schedRes.body.entries.filter((e) => e.employee_id === empRes.body.id);
 
-    // Domingos jamais recebem plantão: cap atingido após o Sábado inicial do enforcement
+    // Em cenário mono-motorista seg_sex: Passo 3 (emergência) força exatamente 1 Domingo
+    // (o primeiro do mês) antes de atingir o cap. Os demais Domingos ficam protegidos.
     const sundayWork = empEntries.filter((e) => {
       if (e.is_day_off) return false;
       return new Date(e.date + 'T12:00:00').getDay() === 0;
     });
-    expect(sundayWork).toHaveLength(0);
+    expect(sundayWork).toHaveLength(1);
 
     // Total de horas dentro de ±12h do alvo (168h = 8h de desvio)
     const finalHours = empEntries.reduce(
