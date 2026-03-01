@@ -232,7 +232,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
       const actualOffInWeek = freeInWeek.length - Math.max(0, maxWorkInWeek);
 
-      const selectedOff = selectOffDays(freeInWeek, actualOffInWeek);
+      const selectedOff = selectOffDays(freeInWeek, actualOffInWeek, employee.id);
       const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
 
       for (const date of selectedWork) {
@@ -301,7 +301,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       const actualWorkInWeek = Math.min(freeInWeek.length - minOffNeeded, 3);
       const actualOffInWeek = freeInWeek.length - actualWorkInWeek;
 
-      const selectedOff = selectOffDays(freeInWeek, actualOffInWeek);
+      const selectedOff = selectOffDays(freeInWeek, actualOffInWeek, employee.id);
       const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
 
       for (const date of selectedWork) {
@@ -864,9 +864,19 @@ function buildWeeks(dates) {
   return weeks;
 }
 
-function selectOffDays(freeDays, count) {
+function selectOffDays(freeDays, count, empOffset = 0) {
   if (count <= 0 || freeDays.length === 0) return [];
-  return [...freeDays].reverse().slice(0, count);
+  const len = freeDays.length;
+  const workCount = len - count;
+  if (workCount <= 0) return [...freeDays];
+  // Rotate the work window per employee so folgas are distributed across different days.
+  // Without this, all employees share the same off days every week (issues #55).
+  const workStart = empOffset % len;
+  const workIndices = new Set();
+  for (let i = 0; i < workCount; i++) {
+    workIndices.add((workStart + i) % len);
+  }
+  return freeDays.filter((_, idx) => !workIndices.has(idx));
 }
 
 function computeShiftStart(date, shift) {
