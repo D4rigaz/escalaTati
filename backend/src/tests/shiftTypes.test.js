@@ -6,13 +6,31 @@ import { freshDb } from './helpers.js';
 beforeEach(() => freshDb());
 
 describe('GET /api/shift-types', () => {
-  it('retorna os 2 turnos fixos após seed — Diurno e Noturno', async () => {
+  it('retorna os 4 turnos fixos após seed — Diurno, Noturno, Manhã e Tarde', async () => {
     const res = await request(app).get('/api/shift-types');
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
+    expect(res.body).toHaveLength(4);
     const names = res.body.map((s) => s.name);
     expect(names).toContain('Diurno');
     expect(names).toContain('Noturno');
+    expect(names).toContain('Manhã');
+    expect(names).toContain('Tarde');
+  });
+
+  it('Manhã tem horário 07:00–13:00 e 6h de duração', async () => {
+    const res = await request(app).get('/api/shift-types');
+    const manha = res.body.find((s) => s.name === 'Manhã');
+    expect(manha.start_time).toBe('07:00');
+    expect(manha.end_time).toBe('13:00');
+    expect(manha.duration_hours).toBe(6);
+  });
+
+  it('Tarde tem horário 13:00–19:00 e 6h de duração', async () => {
+    const res = await request(app).get('/api/shift-types');
+    const tarde = res.body.find((s) => s.name === 'Tarde');
+    expect(tarde.start_time).toBe('13:00');
+    expect(tarde.end_time).toBe('19:00');
+    expect(tarde.duration_hours).toBe(6);
   });
 
   it('Diurno tem horário 07:00–19:00 e 12h de duração', async () => {
