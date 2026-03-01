@@ -20,6 +20,8 @@ const SETOR_HEMO            = 'Transporte Hemodiálise';
 const SHIFT_ADM_NAME        = 'Administrativo'; // 10h
 const SHIFT_DIURNO_NAME     = 'Diurno';         // 12h (regra 16)
 const SHIFT_NOTURNO_NAME    = 'Noturno';        // 12h (regras 21/22)
+const SHIFT_MANHA_NAME      = 'Manhã';          //  6h (extra 42h — issue #65)
+const SHIFT_TARDE_NAME      = 'Tarde';          //  6h (extra 42h — issue #65)
 
 /**
  * Verifica se dois turnos formam um emendado válido (sem descanso).
@@ -155,6 +157,10 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   const isAdm = setores.includes(SETOR_ADM);
   const isSegSex = employee.work_schedule === 'seg_sex';
 
+  // Turnos de 6h (Manhã/Tarde) nunca são selecionados automaticamente pelo
+  // selectShift no ciclo normal de trabalho — somente via lógica extra-42h (#65).
+  const twelveHourShifts = shiftTypes.filter((s) => s.duration_hours === DEFAULT_SHIFT_HOURS);
+
   // Vacation dates for this employee
   const vacationDatesForEmp = new Set(
     dates.filter((d) => allVacationDates.has(`${employee.id}:${d}`))
@@ -236,7 +242,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
 
       for (const date of selectedWork) {
-        const shift = selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+        const shift = selectShift(twelveHourShifts, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
         if (shift) {
           entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
           totalHours += shift.duration_hours;
@@ -267,9 +273,16 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     }
   } else {
     // Ambulância / Hemodiálise — plantão 12h, meta 160h/mês
-    // Não-ADM: sempre 3 plantões/semana (label 36h/42h é apenas contábil CLT — correctHours afina)
+    // Não-ADM: sempre 3 plantões/semana (label 36h/42h determina se há turno extra 6h).
+    // Semana 42h + motorista NOTURNO → adiciona 1 turno extra de 6h (Manhã ou Tarde) — issue #65.
 
-    for (const week of weeks) {
+    const isNoturno = preferredShift?.name === SHIFT_NOTURNO_NAME;
+    const manhaShift = shiftTypes.find((s) => s.name === SHIFT_MANHA_NAME);
+    const tardeShift = shiftTypes.find((s) => s.name === SHIFT_TARDE_NAME);
+
+    for (let wi = 0; wi < weeks.length; wi++) {
+      const week = weeks[wi];
+
       const vacInWeek = week.filter((d) => vacationDatesForEmp.has(d) && !lockedDates.has(d));
       const forcedOff = isSegSex
         ? week.filter((d) => {
@@ -305,7 +318,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
 
       for (const date of selectedWork) {
-        const shift = selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+        const shift = selectShift(twelveHourShifts, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
         if (shift) {
           entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
           totalHours += shift.duration_hours;
@@ -332,6 +345,34 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
         consecutiveHours = 0;
         lastShiftName = null;
+      }
+
+      // Issue #65: Motorista NOTURNO em semana de 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
+      if (isNoturno && getWeekType(employee.cycle_month ?? 1, genMonth, wi) === '42h') {
+        const extraCandidates = [manhaShift, tardeShift].filter(Boolean);
+        let extraAdded = false;
+
+        for (const offDate of selectedOff) {
+          if (extraAdded) break;
+          if (lockedDates.has(offDate) || vacationDatesForEmp.has(offDate)) continue;
+
+          for (const extraShift of extraCandidates) {
+            if (!canAddExtraShiftInMemory(entries, offDate, extraShift, shiftMap)) continue;
+
+            // Modifica a entrada de folga existente para turno de trabalho
+            const offEntry = entries.find(
+              (e) => e.date === offDate && e.is_day_off === 1 && !e.is_locked
+            );
+            if (!offEntry) continue;
+
+            offEntry.is_day_off = 0;
+            offEntry.shift_type_id = extraShift.id;
+            offEntry.notes = null;
+            totalHours += extraShift.duration_hours;
+            extraAdded = true;
+            break;
+          }
+        }
       }
     }
   }
@@ -468,6 +509,55 @@ function canAssignShift(db, employeeId, date, shift) {
         return false;
       } else if (restHours < MIN_REST_HOURS) {
         return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * In-memory equivalent of canAssignShift — checks rest rules against the
+ * already-built entries array (before DB persistence).
+ * Used to validate the extra 6h shift in 42h weeks (issue #65).
+ */
+function canAddExtraShiftInMemory(entries, date, shift, shiftMap) {
+  const workEntries = entries
+    .filter((e) => !e.is_day_off && e.shift_type_id)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const prev = [...workEntries].reverse().find((e) => e.date < date);
+  if (prev) {
+    const prevShift = shiftMap[prev.shift_type_id];
+    if (prevShift) {
+      const prevEnd  = computeShiftEnd(prev.date, prevShift);
+      const newStart = computeShiftStart(date, shift);
+      if (prevEnd && newStart) {
+        const restHours = (newStart - prevEnd) / 3_600_000;
+        if (restHours === 0) {
+          if (!isValidEmendado(prevShift.name, shift.name)) return false;
+          if (prevShift.duration_hours + shift.duration_hours > MAX_CONSECUTIVE_HOURS) return false;
+        } else if (restHours < 0 || restHours < MIN_REST_HOURS) {
+          return false;
+        }
+      }
+    }
+  }
+
+  const next = workEntries.find((e) => e.date > date);
+  if (next) {
+    const nextShift = shiftMap[next.shift_type_id];
+    if (nextShift) {
+      const newEnd    = computeShiftEnd(date, shift);
+      const nextStart = computeShiftStart(next.date, nextShift);
+      if (newEnd && nextStart) {
+        const restHours = (nextStart - newEnd) / 3_600_000;
+        if (restHours === 0) {
+          if (!isValidEmendado(shift.name, nextShift.name)) return false;
+          if (shift.duration_hours + nextShift.duration_hours > MAX_CONSECUTIVE_HOURS) return false;
+        } else if (restHours < 0 || restHours < MIN_REST_HOURS) {
+          return false;
+        }
       }
     }
   }

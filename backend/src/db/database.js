@@ -169,10 +169,16 @@ function seedShiftTypes() {
   runTransaction(() => {
     db.prepare(
       'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
-    ).run('Diurno', '07:00', '19:00', 12, '#34D399');
+    ).run('Diurno',  '07:00', '19:00', 12, '#34D399');
     db.prepare(
       'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
     ).run('Noturno', '19:00', '07:00', 12, '#818CF8');
+    db.prepare(
+      'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
+    ).run('Manhã',   '07:00', '13:00',  6, '#FCD34D');
+    db.prepare(
+      'INSERT INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?, ?, ?, ?, ?)'
+    ).run('Tarde',   '13:00', '19:00',  6, '#F97316');
   });
 }
 
@@ -188,6 +194,16 @@ function migrateShiftTimes() {
     ).run('Noturno', '19:00', '07:00', 12, '#818CF8');
     db.prepare("UPDATE shift_types SET start_time=?, end_time=?, duration_hours=? WHERE name=?")
       .run('19:00', '07:00', 12, 'Noturno');
+    db.prepare(
+      "INSERT OR IGNORE INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?,?,?,?,?)"
+    ).run('Manhã', '07:00', '13:00', 6, '#FCD34D');
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=?, duration_hours=? WHERE name=?")
+      .run('07:00', '13:00', 6, 'Manhã');
+    db.prepare(
+      "INSERT OR IGNORE INTO shift_types (name, start_time, end_time, duration_hours, color) VALUES (?,?,?,?,?)"
+    ).run('Tarde', '13:00', '19:00', 6, '#F97316');
+    db.prepare("UPDATE shift_types SET start_time=?, end_time=?, duration_hours=? WHERE name=?")
+      .run('13:00', '19:00', 6, 'Tarde');
   });
 }
 
