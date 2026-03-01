@@ -11,16 +11,17 @@
  *
  * Calendário de referência — Fevereiro 2025 (28 dias):
  *   Feb 1 = Sábado → Semana 0: [Feb 1]
- *   Feb 2 = Domingo → Semana 1: [Feb 2–8]   (42h com cycle_month=3)
- *   Feb 9 = Domingo → Semana 2: [Feb 9–15]  (42h com cycle_month=3)
- *   Feb 16 = Domingo → Semana 3: [Feb 16–22] (36h com cycle_month=3)
- *   Feb 23 = Domingo → Semana 4: [Feb 23–28] (36h com cycle_month=3)
+ *   Feb 2 = Domingo → Semana 1: [Feb 2–8]   (42h com cycle_start=Fev/2025)
+ *   Feb 9 = Domingo → Semana 2: [Feb 9–15]  (42h com cycle_start=Fev/2025)
+ *   Feb 16 = Domingo → Semana 3: [Feb 16–22] (36h com cycle_start=Fev/2025)
+ *   Feb 23 = Domingo → Semana 4: [Feb 23–28] (36h com cycle_start=Fev/2025)
  *
- * getWeekType(3, 2, wi):
- *   actualCycle = (1 + 2) % 3 = 0 → patterns[0] = ['36h','42h','42h','36h']
+ * calculateEffectiveCycleMonth(2, 2025, 2, 2025) → elapsed=0 → phase=1
+ * getWeekTypeFromPhase(1, wi) → patterns[1] = ['36h','42h','42h','36h']
  *   wi=0 → 36h, wi=1 → 42h, wi=2 → 42h, wi=3 → 36h, wi=4 → 36h (clamped)
+ * (idêntico ao antigo getWeekType(3, 2, wi) → actualCycle=0 → patterns[0])
  *
- * Total esperado com cycle_month=3 em Feb/2025 (motorista NOTURNO):
+ * Total esperado com cycle_start=Fev/2025 em Feb/2025 (motorista NOTURNO):
  *   Semana 0 (1 dia): 0 plantões (1 dia livre → min 1 folga → 0 trabalho)
  *   Semanas 1 e 2 (42h): 3 × 12h + 1 × 6h = 42h cada
  *   Semanas 3 e 4 (36h): 3 × 12h = 36h cada
@@ -52,8 +53,13 @@ function workEntriesInWeek(allEntries, empId, weekDates) {
   return entriesInWeek(allEntries, empId, weekDates).filter((e) => !e.is_day_off);
 }
 
-/** Cria motorista via API com preferred_shift por nome */
-async function createNoturnoEmployee(name, cycleMonth = 3) {
+/**
+ * Cria motorista via API com preferred_shift por nome.
+ * cycle_start padrão: Fev/2025 → elapsed=0 → phase=1 para Fev/2025
+ * (equivale ao antigo cycle_month=3 para genMonth=2: actualCycle=0 → patterns[0]=['36h','42h','42h','36h'])
+ * getWeekTypeFromPhase(1,wi) = patterns[1]=['36h','42h','42h','36h'] — padrão idêntico.
+ */
+async function createNoturnoEmployee(name, cycleStartMonth = 2, cycleStartYear = 2025) {
   // Busca o id do turno Noturno a partir da lista de shift-types
   const shiftsRes = await request(app).get('/api/shift-types');
   const noturnoId = shiftsRes.body.find((s) => s.name === 'Noturno')?.id;
@@ -62,14 +68,15 @@ async function createNoturnoEmployee(name, cycleMonth = 3) {
   const empRes = await request(app).post('/api/employees').send({
     name,
     setores: ['Transporte Ambulância'],
-    cycle_month: cycleMonth,
+    cycle_start_month: cycleStartMonth,
+    cycle_start_year: cycleStartYear,
     restRules: { preferred_shift_id: noturnoId, notes: null },
   });
   expect(empRes.status).toBe(201);
   return { emp: empRes.body, noturnoId };
 }
 
-async function createDiurnoEmployee(name, cycleMonth = 3) {
+async function createDiurnoEmployee(name, cycleStartMonth = 2, cycleStartYear = 2025) {
   const shiftsRes = await request(app).get('/api/shift-types');
   const diurnoId = shiftsRes.body.find((s) => s.name === 'Diurno')?.id;
   expect(diurnoId).toBeDefined();
@@ -77,7 +84,8 @@ async function createDiurnoEmployee(name, cycleMonth = 3) {
   const empRes = await request(app).post('/api/employees').send({
     name,
     setores: ['Transporte Ambulância'],
-    cycle_month: cycleMonth,
+    cycle_start_month: cycleStartMonth,
+    cycle_start_year: cycleStartYear,
     restRules: { preferred_shift_id: diurnoId, notes: null },
   });
   expect(empRes.status).toBe(201);

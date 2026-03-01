@@ -33,6 +33,20 @@ export function isValidEmendado(prevShiftName, nextShiftName) {
 }
 
 /**
+ * Calcula a fase do ciclo CLT (1, 2 ou 3) a partir da data de início do ciclo
+ * do motorista e do mês de geração.
+ * @param {number} cycleStartMonth - Mês de início do ciclo (1–12).
+ * @param {number} cycleStartYear  - Ano de início do ciclo.
+ * @param {number} genMonth        - Mês da geração (1–12).
+ * @param {number} genYear         - Ano da geração.
+ * @returns {1|2|3}
+ */
+export function calculateEffectiveCycleMonth(cycleStartMonth, cycleStartYear, genMonth, genYear) {
+  const elapsed = (genYear * 12 + genMonth) - (cycleStartYear * 12 + cycleStartMonth);
+  return ((elapsed % 3) + 3) % 3 + 1;
+}
+
+/**
  * Retorna o label contábil CLT da semana para um motorista.
  * @param {number} cycleMonth - Fase do ciclo do motorista (1, 2 ou 3).
  * @param {number} genMonth   - Mês da geração (1–12).
@@ -47,6 +61,23 @@ export function getWeekType(cycleMonth, genMonth, weekIndex) {
   ];
   const actualCycle = ((genMonth - 1 + cycleMonth - 1) % 3);
   return patterns[actualCycle][Math.min(weekIndex, 3)];
+}
+
+/**
+ * Retorna o label CLT da semana usando a fase direta (sem rotação adicional por genMonth).
+ * Usar em conjunto com calculateEffectiveCycleMonth.
+ * @param {1|2|3} phase    - Fase retornada por calculateEffectiveCycleMonth
+ * @param {number} weekIndex
+ * @returns {'36h' | '42h'}
+ */
+function getWeekTypeFromPhase(phase, weekIndex) {
+  const patterns = [
+    null,
+    ['36h', '42h', '42h', '36h'],  // fase 1
+    ['42h', '42h', '36h', '42h'],  // fase 2
+    ['42h', '36h', '42h', '42h'],  // fase 3
+  ];
+  return patterns[phase][Math.min(weekIndex, 3)];
 }
 
 /**
@@ -107,7 +138,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
     const result = runTransaction(() => {
       return generateForEmployee(
         db, employee, shiftTypes, shiftMap, dates,
-        overwriteLocked, warnings, allVacationDates, month
+        overwriteLocked, warnings, allVacationDates, month, year
       );
     });
     results.push(result);
@@ -130,7 +161,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   return { results, warnings };
 }
 
-function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth) {
+function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth, genYear) {
   const rules = db
     .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
     .get(employee.id) || { min_rest_hours: MIN_REST_HOURS, preferred_shift_id: null };
@@ -176,6 +207,13 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
 
   // Build weekly groups (Sun-based)
   const weeks = buildWeeks(dates);
+
+  // Compute the CLT cycle phase once for this employee/month combination.
+  const effectiveCycleMonth = calculateEffectiveCycleMonth(
+    employee.cycle_start_month ?? 1,
+    employee.cycle_start_year ?? new Date().getFullYear(),
+    genMonth, genYear
+  );
 
   let totalHours = 0;
   let lastShiftEnd = null;
@@ -234,7 +272,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         lastShiftName = null;
       }
 
-      const maxTurnosNaSemana = getWeekType(employee.cycle_month ?? 1, genMonth, wi) === '36h' ? 3 : 4;
+      const maxTurnosNaSemana = getWeekTypeFromPhase(effectiveCycleMonth, wi) === '36h' ? 3 : 4;
       const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
       const actualOffInWeek = freeInWeek.length - Math.max(0, maxWorkInWeek);
 
@@ -348,7 +386,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       }
 
       // Issue #65: Motorista NOTURNO em semana de 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
-      if (isNoturno && getWeekType(employee.cycle_month ?? 1, genMonth, wi) === '42h') {
+      if (isNoturno && getWeekTypeFromPhase(effectiveCycleMonth, wi) === '42h') {
         const extraCandidates = [manhaShift, tardeShift].filter(Boolean);
         let extraAdded = false;
 
@@ -407,7 +445,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
 
   const weekClassifications = weeks.map((_, wi) => ({
     weekIndex: wi,
-    type: getWeekType(employee.cycle_month ?? 1, genMonth, wi),
+    type: getWeekTypeFromPhase(effectiveCycleMonth, wi),
   }));
 
   return { employee: employee.name, hours: finalHours, weekClassifications };

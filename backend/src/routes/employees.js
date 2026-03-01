@@ -10,8 +10,8 @@ const SETORES_VALIDOS = [
 ];
 
 const WORK_SCHEDULES_VALIDOS = ['seg_sex', 'dom_sab'];
-const CYCLE_MONTHS_VALIDOS = [1, 2, 3];
 const COLOR_REGEX = /^#[0-9A-Fa-f]{6}$/;
+const MIN_CYCLE_START_YEAR = 2020;
 
 /** Rejeita datas com componentes inválidos (ex: 2025-02-30 rola para março no V8). */
 function isValidCalendarDate(str) {
@@ -106,9 +106,10 @@ router.get('/:id', (req, res) => {
 // ── POST /api/employees ───────────────────────────────────────────────────────
 router.post('/', (req, res) => {
   const db = getDb();
-  const { name, setores, work_schedule = 'dom_sab', color = '#6B7280', cycle_month, restRules } = req.body;
-  // null ou ausente → usar default 1 (gerador usa employee.cycle_month ?? 1)
-  const effectiveCycleMonth = cycle_month ?? 1;
+  const { name, setores, work_schedule = 'dom_sab', color = '#6B7280', cycle_start_month, cycle_start_year, restRules } = req.body;
+  // null ou ausente → usar defaults
+  const effectiveCycleStartMonth = cycle_start_month ?? 1;
+  const effectiveCycleStartYear  = cycle_start_year  ?? 2026;
 
   if (!name) return res.status(400).json({ error: 'name é obrigatório' });
 
@@ -123,14 +124,20 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'color deve ser um hex válido (#RRGGBB)' });
   }
 
-  if (!CYCLE_MONTHS_VALIDOS.includes(Number(effectiveCycleMonth))) {
-    return res.status(400).json({ error: 'cycle_month deve ser 1, 2 ou 3' });
+  const csm = Number(effectiveCycleStartMonth);
+  if (!Number.isInteger(csm) || csm < 1 || csm > 12) {
+    return res.status(400).json({ error: 'cycle_start_month deve ser entre 1 e 12' });
+  }
+
+  const csy = Number(effectiveCycleStartYear);
+  if (!Number.isInteger(csy) || csy < MIN_CYCLE_START_YEAR) {
+    return res.status(400).json({ error: `cycle_start_year deve ser um inteiro >= ${MIN_CYCLE_START_YEAR}` });
   }
 
   const employee = runTransaction(() => {
     const result = db
-      .prepare('INSERT INTO employees (name, cargo, work_schedule, color, cycle_month) VALUES (?, ?, ?, ?, ?)')
-      .run(name.trim(), 'Motorista', work_schedule, color, Number(effectiveCycleMonth));
+      .prepare('INSERT INTO employees (name, cargo, work_schedule, color, cycle_start_month, cycle_start_year) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(name.trim(), 'Motorista', work_schedule, color, csm, csy);
 
     const employeeId = result.lastInsertRowid;
 
@@ -161,7 +168,7 @@ router.post('/', (req, res) => {
 // ── PUT /api/employees/:id ────────────────────────────────────────────────────
 router.put('/:id', (req, res) => {
   const db = getDb();
-  const { name, setores, work_schedule, color, cycle_month, active, restRules } = req.body;
+  const { name, setores, work_schedule, color, cycle_start_month, cycle_start_year, active, restRules } = req.body;
   const id = parseInt(req.params.id);
 
   const employee = db.prepare('SELECT id FROM employees WHERE id = ?').get(id);
@@ -180,8 +187,18 @@ router.put('/:id', (req, res) => {
     return res.status(400).json({ error: 'color deve ser um hex válido (#RRGGBB)' });
   }
 
-  if (cycle_month !== undefined && cycle_month !== null && !CYCLE_MONTHS_VALIDOS.includes(Number(cycle_month))) {
-    return res.status(400).json({ error: 'cycle_month deve ser 1, 2 ou 3' });
+  if (cycle_start_month !== undefined && cycle_start_month !== null) {
+    const csm = Number(cycle_start_month);
+    if (!Number.isInteger(csm) || csm < 1 || csm > 12) {
+      return res.status(400).json({ error: 'cycle_start_month deve ser entre 1 e 12' });
+    }
+  }
+
+  if (cycle_start_year !== undefined && cycle_start_year !== null) {
+    const csy = Number(cycle_start_year);
+    if (!Number.isInteger(csy) || csy < MIN_CYCLE_START_YEAR) {
+      return res.status(400).json({ error: `cycle_start_year deve ser um inteiro >= ${MIN_CYCLE_START_YEAR}` });
+    }
   }
 
   runTransaction(() => {
@@ -192,9 +209,12 @@ router.put('/:id', (req, res) => {
       db.prepare("UPDATE employees SET work_schedule = ?, updated_at = datetime('now') WHERE id = ?").run(work_schedule, id);
     if (color !== undefined)
       db.prepare("UPDATE employees SET color = ?, updated_at = datetime('now') WHERE id = ?").run(color, id);
-    if (cycle_month !== undefined && cycle_month !== null)
-      db.prepare("UPDATE employees SET cycle_month = ?, updated_at = datetime('now') WHERE id = ?")
-        .run(Number(cycle_month), id);
+    if (cycle_start_month !== undefined && cycle_start_month !== null)
+      db.prepare("UPDATE employees SET cycle_start_month = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(Number(cycle_start_month), id);
+    if (cycle_start_year !== undefined && cycle_start_year !== null)
+      db.prepare("UPDATE employees SET cycle_start_year = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(Number(cycle_start_year), id);
     if (active !== undefined)
       db.prepare("UPDATE employees SET active = ?, updated_at = datetime('now') WHERE id = ?").run(active ? 1 : 0, id);
 
