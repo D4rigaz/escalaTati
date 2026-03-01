@@ -156,91 +156,115 @@ describe('DELETE /api/employees/:id', () => {
   });
 });
 
-describe('cycle_month — POST/PUT validação', () => {
-  it('aceita cycle_month válido (1, 2, 3)', async () => {
-    for (const cm of [1, 2, 3]) {
-      const db = freshDb();
+describe('cycle_start — POST/PUT validação', () => {
+  it('aceita cycle_start_month válido (1-12) no POST', async () => {
+    for (const csm of [1, 6, 12]) {
+      freshDb();
       const res = await request(app).post('/api/employees').send({
-        name: `Motorista Ciclo ${cm}`,
+        name: `Motorista Mês ${csm}`,
         setores: ['Transporte Ambulância'],
-        cycle_month: cm,
+        cycle_start_month: csm,
+        cycle_start_year: 2025,
       });
       expect(res.status).toBe(201);
-      expect(res.body.cycle_month).toBe(cm);
+      expect(res.body.cycle_start_month).toBe(csm);
+      expect(res.body.cycle_start_year).toBe(2025);
       resetDb();
     }
   });
 
-  it('rejeita cycle_month inválido no POST', async () => {
-    for (const cm of [0, 4, 'invalido', 1.5]) {
+  it('rejeita cycle_start_month inválido no POST (0, 13, string, 1.5)', async () => {
+    for (const csm of [0, 13, 'invalido', 1.5]) {
       freshDb();
       const res = await request(app).post('/api/employees').send({
         name: 'Teste',
         setores: ['Transporte Ambulância'],
-        cycle_month: cm,
+        cycle_start_month: csm,
+        cycle_start_year: 2025,
       });
       expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/cycle_month/);
+      expect(res.body.error).toMatch(/cycle_start_month/);
       resetDb();
     }
   });
 
-  it('cycle_month default é 1 quando não fornecido', async () => {
+  it('rejeita cycle_start_year < 2020 no POST', async () => {
+    freshDb();
+    const res = await request(app).post('/api/employees').send({
+      name: 'Teste',
+      setores: ['Transporte Ambulância'],
+      cycle_start_month: 1,
+      cycle_start_year: 2019,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/cycle_start_year/);
+    resetDb();
+  });
+
+  it('defaults de cycle_start são 1 e 2026 quando não fornecidos', async () => {
     freshDb();
     const res = await request(app).post('/api/employees').send({
       name: 'Sem Ciclo',
       setores: ['Transporte Ambulância'],
     });
     expect(res.status).toBe(201);
-    expect(res.body.cycle_month).toBe(1);
+    expect(res.body.cycle_start_month).toBe(1);
+    expect(res.body.cycle_start_year).toBe(2026);
     resetDb();
   });
 
-  it('atualiza cycle_month via PUT', async () => {
+  it('atualiza cycle_start_month e cycle_start_year via PUT', async () => {
     const db = freshDb();
     const emp = createEmployee(db, { name: 'Ciclo Update', setor: 'Transporte Ambulância' });
-    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_month: 3 });
+    const res = await request(app).put(`/api/employees/${emp.id}`).send({
+      cycle_start_month: 6,
+      cycle_start_year: 2024,
+    });
     expect(res.status).toBe(200);
-    expect(res.body.cycle_month).toBe(3);
+    expect(res.body.cycle_start_month).toBe(6);
+    expect(res.body.cycle_start_year).toBe(2024);
     resetDb();
   });
 
-  it('rejeita cycle_month inválido no PUT', async () => {
+  it('rejeita cycle_start_month inválido no PUT', async () => {
     const db = freshDb();
     const emp = createEmployee(db, { name: 'Ciclo Inválido', setor: 'Transporte Ambulância' });
-    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_month: 5 });
+    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_start_month: 15 });
     expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/cycle_start_month/);
     resetDb();
   });
 
-  it('aceita cycle_month null no POST — armazena default 1', async () => {
-    freshDb();
-    const res = await request(app).post('/api/employees').send({
-      name: 'Ciclo Null',
-      setores: ['Transporte Ambulância'],
-      cycle_month: null,
-    });
-    expect(res.status).toBe(201);
-    expect(res.body.cycle_month).toBe(1);
-    resetDb();
-  });
-
-  it('aceita cycle_month null no PUT — no-op, mantém valor atual', async () => {
+  it('aceita cycle_start_month null no PUT — no-op, mantém valor atual', async () => {
     const db = freshDb();
     const emp = createEmployee(db, { name: 'Ciclo Reset', setor: 'Transporte Ambulância' });
-    // createEmployee não define cycle_month → default do DB é 1
-    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_month: null });
+    // createEmployee usa defaults do DB: cycle_start_month=1, cycle_start_year=2026
+    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_start_month: null });
     expect(res.status).toBe(200);
-    expect(res.body.cycle_month).toBe(1);
+    expect(res.body.cycle_start_month).toBe(1);
     resetDb();
   });
 
-  it('rejeita cycle_month 99 no PUT', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Ciclo 99', setor: 'Transporte Ambulância' });
-    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_month: 99 });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/cycle_month/);
+  it('dois motoristas com cycle_start diferentes geram ciclos diferentes no mesmo mês', async () => {
+    freshDb();
+    // Motorista A: cycle_start=Jan/2026 → ciclo 1 em Jan/2026, ciclo 2 em Fev/2026
+    const resA = await request(app).post('/api/employees').send({
+      name: 'Motorista A',
+      setores: ['Transporte Ambulância'],
+      cycle_start_month: 1,
+      cycle_start_year: 2026,
+    });
+    // Motorista B: cycle_start=Dez/2025 → ciclo 2 em Jan/2026, ciclo 3 em Fev/2026
+    const resB = await request(app).post('/api/employees').send({
+      name: 'Motorista B',
+      setores: ['Transporte Ambulância'],
+      cycle_start_month: 12,
+      cycle_start_year: 2025,
+    });
+    expect(resA.status).toBe(201);
+    expect(resB.status).toBe(201);
+    // Ciclos distintos: A.start ≠ B.start → computeCycleMonth diferente para genMonth=Jan/2026
+    expect(resA.body.cycle_start_month).not.toBe(resB.body.cycle_start_month);
     resetDb();
   });
 });

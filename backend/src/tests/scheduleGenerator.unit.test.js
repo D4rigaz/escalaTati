@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { isValidEmendado, correctHours, enforceDailyCoverage, getWeekType } from '../services/scheduleGenerator.js';
+import { isValidEmendado, correctHours, enforceDailyCoverage, getWeekType, calculateEffectiveCycleMonth } from '../services/scheduleGenerator.js';
 import { freshDb, createEmployee } from './helpers.js';
 
 describe('isValidEmendado', () => {
@@ -366,6 +366,35 @@ describe('enforceDailyCoverage', () => {
     expect(getEntry(db, emp2.id, '2025-01-08').is_day_off).toBe(1); // Marta em férias intocada
     expect(warnings.some(w => w.type === 'cobertura_minima_insuficiente' && w.date === '2025-01-08')).toBe(true);
     expect(warnings.some(w => w.type === 'sem_motorista')).toBe(false);
+  });
+});
+
+describe('calculateEffectiveCycleMonth', () => {
+  it('mês de início: retorna fase 1', () => {
+    expect(calculateEffectiveCycleMonth(1, 2026, 1, 2026)).toBe(1);
+    expect(calculateEffectiveCycleMonth(3, 2026, 3, 2026)).toBe(1);
+  });
+
+  it('1 mês depois: retorna fase 2', () => {
+    expect(calculateEffectiveCycleMonth(1, 2026, 2, 2026)).toBe(2);
+  });
+
+  it('2 meses depois: retorna fase 3', () => {
+    expect(calculateEffectiveCycleMonth(1, 2026, 3, 2026)).toBe(3);
+  });
+
+  it('3 meses depois: retorna fase 1 (reinicia)', () => {
+    expect(calculateEffectiveCycleMonth(1, 2026, 4, 2026)).toBe(1);
+  });
+
+  it('12 meses depois (1 ano): retorna fase 1', () => {
+    expect(calculateEffectiveCycleMonth(1, 2026, 1, 2027)).toBe(1);
+  });
+
+  it('dois motoristas com cycle_start diferentes → fases distintas no mesmo mês', () => {
+    // Jan/2026: A(start=Jan/2026)=fase1, B(start=Dez/2025)=fase2
+    expect(calculateEffectiveCycleMonth(1, 2026, 1, 2026)).toBe(1);
+    expect(calculateEffectiveCycleMonth(12, 2025, 1, 2026)).toBe(2);
   });
 });
 

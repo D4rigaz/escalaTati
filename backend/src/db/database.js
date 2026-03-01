@@ -49,7 +49,8 @@ function initSchema() {
       cargo TEXT NOT NULL,
       work_schedule TEXT NOT NULL DEFAULT 'dom_sab',
       color TEXT NOT NULL DEFAULT '#6B7280',
-      cycle_month INTEGER NOT NULL DEFAULT 1,
+      cycle_start_month INTEGER NOT NULL DEFAULT 1,
+      cycle_start_year INTEGER NOT NULL DEFAULT 2026,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
@@ -130,9 +131,22 @@ function runMigrations() {
     db.exec("ALTER TABLE employees ADD COLUMN color TEXT NOT NULL DEFAULT '#6B7280'");
   }
 
-  // Add cycle_month to employees (Issue #41)
-  if (!empCols.includes('cycle_month')) {
-    db.exec('ALTER TABLE employees ADD COLUMN cycle_month INTEGER NOT NULL DEFAULT 1');
+  // Migrate cycle_month → cycle_start_month + cycle_start_year (Issue #63)
+  if (empCols.includes('cycle_month')) {
+    if (!empCols.includes('cycle_start_month')) {
+      db.exec('ALTER TABLE employees ADD COLUMN cycle_start_month INTEGER NOT NULL DEFAULT 1');
+    }
+    if (!empCols.includes('cycle_start_year')) {
+      db.exec('ALTER TABLE employees ADD COLUMN cycle_start_year INTEGER NOT NULL DEFAULT 2026');
+    }
+    db.exec('ALTER TABLE employees DROP COLUMN cycle_month');
+  }
+  // Add cycle_start_month / cycle_start_year to fresh DBs without either column
+  if (!empCols.includes('cycle_month') && !empCols.includes('cycle_start_month')) {
+    db.exec('ALTER TABLE employees ADD COLUMN cycle_start_month INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!empCols.includes('cycle_month') && !empCols.includes('cycle_start_year')) {
+    db.exec('ALTER TABLE employees ADD COLUMN cycle_start_year INTEGER NOT NULL DEFAULT 2026');
   }
 
   // Migrate setor column → employee_sectors table
