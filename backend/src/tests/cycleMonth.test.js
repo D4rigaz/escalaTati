@@ -99,24 +99,22 @@ describe('Cenário A — Não-ADM: cycle_month não afeta plantões físicos', (
 // ADM (Transporte Administrativo): cycle_month determina semanas 36h (3 turnos)
 // vs 42h (4 turnos).
 //
-// cycle_month=2: total exato 160h em Fev/2025 → COVERAGE_HOURS_CAP atingido →
-//   enforcement não altera → semana 1 = 36h (3 turnos), semana 2 = 42h (4 turnos).
+// cycle_month=2: com turnos de 12h (Diurno), total bruto > 160h → correctHours remove
+//   1 plantão da semana 2 → semana 1 = 4 (36h base + 1 enforcement), semana 2 = 3.
 //
 // cycle_month=1: total 154h → enforcement adiciona 1 turno na semana 1 (Feb 6) →
 //   semana 1 cresce, mas semana 2 (36h, 3 turnos) permanece intacta pois após
 //   a adição o cap é atingido e enforcement para.
 
 describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por semana', () => {
-  it('ADM cycle_month=2: semana 1 de Fev/2025 tem label 36h → exatamente 3 plantões; semana 2 tem label 42h → 4 plantões', async () => {
+  it('ADM cycle_month=2: semana 1 de Fev/2025 (36h label) tem 4 plantões (enforcement); semana 2 (42h label) tem 3 plantões (correctHours remove 1)', async () => {
     // cycle_month=2 → actualCycle=2 → patterns[2]=['42h','36h','42h','42h']
     // sem 1=36h (3 turnos base), sem 2=42h (4 turnos base).
     //
-    // Com a distribuição de folgas por employee.id (fix #55), o Domingo que inicia a
-    // semana 1 (Feb 2) passa a ser folga do único motorista presente. O enforcement
-    // (enforceDailyCoverage Passo 2) converte esse Domingo em plantão forçado, elevando
-    // o total de week1 de 3 (base 36h) para 4 (3 + 1 enforcement).
-    // A semana 2 permanece em 4 (42h base) pois o cap de 160h já foi atingido.
-    // A relação label 36h < label 42h é verificada em Cenário D1 com dois motoristas.
+    // Com turnos de 12h (Diurno — #64), o total bruto em Fev é > 160h → correctHours
+    // remove 1 plantão da semana 2 → week2=3. O enforcement adiciona 1 em week1 (Feb 2
+    // Domingo forçado via Passo 2), elevando week1 para 4.
+    // Cap de 168h atingido após enforcement → sem alterações adicionais.
     const empRes = await request(app)
       .post('/api/employees')
       .send({ name: 'ADM Ciclo2', setores: ['Transporte Administrativo'], cycle_month: 2 });
@@ -129,10 +127,10 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
     const entries = schedRes.body.entries;
     const empId = empRes.body.id;
 
-    // Semana 1 (36h base + 1 enforcement no Domingo inicial): 4 plantões no cenário mono-motorista
+    // Semana 1 (36h base + 1 enforcement no Domingo inicial): 4 plantões
     expect(workIn(entries, empId, FEV_WEEK1)).toBe(4);
-    // Semana 2 (42h para cycle_month=2): 4 plantões (cap atingido — sem enforcement)
-    expect(workIn(entries, empId, FEV_WEEK2)).toBe(4);
+    // Semana 2 (42h base, correctHours removeu 1 plantão para ajustar 12h shifts): 3 plantões
+    expect(workIn(entries, empId, FEV_WEEK2)).toBe(3);
   });
 
   it('ADM cycle_month=1: semana 2 de Fev/2025 tem label 36h → exatamente 3 plantões; semana 1 (42h) tem mais plantões que semana 2 (36h)', async () => {

@@ -52,7 +52,9 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
         work_schedule: employee?.work_schedule ?? 'dom_sab',
         color: employee?.color ?? '#6B7280',
         cycle_month: String(employee?.cycle_month ?? 1),
-        preferred_shift_id: employee?.restRules?.preferred_shift_id ?? '',
+        preferred_shift_id: employee?.restRules?.preferred_shift_id != null
+          ? String(employee.restRules.preferred_shift_id)
+          : '',
         notes: employee?.restRules?.notes ?? '',
       });
       setSelectedSetores(employee?.setores ?? []);
@@ -251,14 +253,33 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
               </div>
               <div className="mt-3">
                 <label className="label">Turno preferencial</label>
-                <select className="input" {...register('preferred_shift_id')}>
-                  <option value="">Sem preferência</option>
-                  {shiftTypes.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.start_time}–{s.end_time})
-                    </option>
-                  ))}
-                </select>
+                <div className="flex gap-2 mt-1">
+                  {['Diurno', 'Noturno'].map((name) => {
+                    const shift = shiftTypes.find((s) => s.name === name);
+                    if (!shift) return null;
+                    return (
+                      <label
+                        key={shift.id}
+                        className="flex items-center gap-2 cursor-pointer text-sm border rounded-lg px-3 py-2 flex-1 justify-center has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50"
+                      >
+                        <input
+                          type="radio"
+                          className="sr-only"
+                          value={String(shift.id)}
+                          {...register('preferred_shift_id', { required: 'Selecione o turno' })}
+                        />
+                        <span
+                          className="w-3 h-3 rounded-full shrink-0"
+                          style={{ backgroundColor: shift.color }}
+                        />
+                        {name}
+                      </label>
+                    );
+                  })}
+                </div>
+                {errors.preferred_shift_id && (
+                  <p className="text-xs text-red-500 mt-1">{errors.preferred_shift_id.message}</p>
+                )}
               </div>
               <div className="mt-3">
                 <label className="label">Observações</label>

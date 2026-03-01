@@ -6,16 +6,29 @@ import { freshDb } from './helpers.js';
 beforeEach(() => freshDb());
 
 describe('GET /api/shift-types', () => {
-  it('retorna os 5 turnos padrão após seed', async () => {
+  it('retorna os 2 turnos fixos após seed — Diurno e Noturno', async () => {
     const res = await request(app).get('/api/shift-types');
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(5); // Manhã, Tarde, Noturno, Administrativo, Diurno (regra 16)
+    expect(res.body).toHaveLength(2);
     const names = res.body.map((s) => s.name);
-    expect(names).toContain('Manhã');
-    expect(names).toContain('Tarde');
-    expect(names).toContain('Noturno');
-    expect(names).toContain('Administrativo');
     expect(names).toContain('Diurno');
+    expect(names).toContain('Noturno');
+  });
+
+  it('Diurno tem horário 07:00–19:00 e 12h de duração', async () => {
+    const res = await request(app).get('/api/shift-types');
+    const diurno = res.body.find((s) => s.name === 'Diurno');
+    expect(diurno.start_time).toBe('07:00');
+    expect(diurno.end_time).toBe('19:00');
+    expect(diurno.duration_hours).toBe(12);
+  });
+
+  it('Noturno tem horário 19:00–07:00 e 12h de duração', async () => {
+    const res = await request(app).get('/api/shift-types');
+    const noturno = res.body.find((s) => s.name === 'Noturno');
+    expect(noturno.start_time).toBe('19:00');
+    expect(noturno.end_time).toBe('07:00');
+    expect(noturno.duration_hours).toBe(12);
   });
 
   it('cada turno tem os campos necessários', async () => {
@@ -30,8 +43,8 @@ describe('GET /api/shift-types', () => {
   });
 });
 
-describe('POST /api/shift-types', () => {
-  it('cria novo turno com todos os campos', async () => {
+describe('POST /api/shift-types — desabilitado (turnos fixos)', () => {
+  it('retorna 403 ao tentar criar turno', async () => {
     const res = await request(app).post('/api/shift-types').send({
       name: 'Intermediário',
       start_time: '08:00',
@@ -39,81 +52,37 @@ describe('POST /api/shift-types', () => {
       duration_hours: 6,
       color: '#34D399',
     });
-    expect(res.status).toBe(201);
-    expect(res.body.name).toBe('Intermediário');
-    expect(res.body.id).toBeTruthy();
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBeTruthy();
   });
+});
 
-  it('retorna 400 quando faltam campos', async () => {
-    const res = await request(app).post('/api/shift-types').send({ name: 'Incompleto' });
-    expect(res.status).toBe(400);
+describe('PUT /api/shift-types/:id — desabilitado (turnos fixos)', () => {
+  it('retorna 403 ao tentar editar turno existente', async () => {
+    const list = await request(app).get('/api/shift-types');
+    const turno = list.body[0];
+    const res = await request(app).put(`/api/shift-types/${turno.id}`).send({ color: '#FF0000' });
+    expect(res.status).toBe(403);
     expect(res.body.error).toBeTruthy();
   });
 
-  it('retorna 409 para nome duplicado', async () => {
-    const res = await request(app).post('/api/shift-types').send({
-      name: 'Manhã',
-      start_time: '06:00',
-      end_time: '12:00',
-      duration_hours: 6,
-      color: '#FCD34D',
-    });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/já existe/i);
-  });
-});
-
-describe('PUT /api/shift-types/:id', () => {
-  it('atualiza a cor de um turno', async () => {
-    const list = await request(app).get('/api/shift-types');
-    const turno = list.body[0];
-
-    const res = await request(app)
-      .put(`/api/shift-types/${turno.id}`)
-      .send({ color: '#FF0000' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.color).toBe('#FF0000');
-  });
-
-  it('retorna 404 para id inexistente', async () => {
+  it('retorna 403 para id inexistente (não 404)', async () => {
     const res = await request(app).put('/api/shift-types/9999').send({ color: '#000' });
-    expect(res.status).toBe(404);
-  });
-
-  it('retorna 409 ao renomear para nome já existente', async () => {
-    const list = await request(app).get('/api/shift-types');
-    const turno = list.body[0];
-
-    const res = await request(app)
-      .put(`/api/shift-types/${turno.id}`)
-      .send({ name: 'Tarde' });
-
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(403);
   });
 });
 
-describe('DELETE /api/shift-types/:id', () => {
-  it('exclui turno não utilizado', async () => {
-    const created = await request(app).post('/api/shift-types').send({
-      name: 'Temporário',
-      start_time: '10:00',
-      end_time: '16:00',
-      duration_hours: 6,
-      color: '#000000',
-    });
-    expect(created.status).toBe(201);
-
-    const res = await request(app).delete(`/api/shift-types/${created.body.id}`);
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-
+describe('DELETE /api/shift-types/:id — desabilitado (turnos fixos)', () => {
+  it('retorna 403 ao tentar excluir turno existente', async () => {
     const list = await request(app).get('/api/shift-types');
-    expect(list.body.find((s) => s.id === created.body.id)).toBeUndefined();
+    const turno = list.body[0];
+    const res = await request(app).delete(`/api/shift-types/${turno.id}`);
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBeTruthy();
   });
 
-  it('retorna 404 para id inexistente', async () => {
+  it('retorna 403 para id inexistente (não 404)', async () => {
     const res = await request(app).delete('/api/shift-types/9999');
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(403);
   });
 });
