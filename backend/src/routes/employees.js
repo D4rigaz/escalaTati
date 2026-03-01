@@ -106,7 +106,9 @@ router.get('/:id', (req, res) => {
 // ── POST /api/employees ───────────────────────────────────────────────────────
 router.post('/', (req, res) => {
   const db = getDb();
-  const { name, setores, work_schedule = 'dom_sab', color = '#6B7280', cycle_month = 1, restRules } = req.body;
+  const { name, setores, work_schedule = 'dom_sab', color = '#6B7280', cycle_month, restRules } = req.body;
+  // null ou ausente → usar default 1 (gerador usa employee.cycle_month ?? 1)
+  const effectiveCycleMonth = cycle_month ?? 1;
 
   if (!name) return res.status(400).json({ error: 'name é obrigatório' });
 
@@ -121,14 +123,14 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'color deve ser um hex válido (#RRGGBB)' });
   }
 
-  if (!CYCLE_MONTHS_VALIDOS.includes(Number(cycle_month))) {
+  if (!CYCLE_MONTHS_VALIDOS.includes(Number(effectiveCycleMonth))) {
     return res.status(400).json({ error: 'cycle_month deve ser 1, 2 ou 3' });
   }
 
   const employee = runTransaction(() => {
     const result = db
       .prepare('INSERT INTO employees (name, cargo, work_schedule, color, cycle_month) VALUES (?, ?, ?, ?, ?)')
-      .run(name.trim(), 'Motorista', work_schedule, color, Number(cycle_month));
+      .run(name.trim(), 'Motorista', work_schedule, color, Number(effectiveCycleMonth));
 
     const employeeId = result.lastInsertRowid;
 
@@ -178,7 +180,7 @@ router.put('/:id', (req, res) => {
     return res.status(400).json({ error: 'color deve ser um hex válido (#RRGGBB)' });
   }
 
-  if (cycle_month !== undefined && !CYCLE_MONTHS_VALIDOS.includes(Number(cycle_month))) {
+  if (cycle_month !== undefined && cycle_month !== null && !CYCLE_MONTHS_VALIDOS.includes(Number(cycle_month))) {
     return res.status(400).json({ error: 'cycle_month deve ser 1, 2 ou 3' });
   }
 
@@ -190,7 +192,7 @@ router.put('/:id', (req, res) => {
       db.prepare("UPDATE employees SET work_schedule = ?, updated_at = datetime('now') WHERE id = ?").run(work_schedule, id);
     if (color !== undefined)
       db.prepare("UPDATE employees SET color = ?, updated_at = datetime('now') WHERE id = ?").run(color, id);
-    if (cycle_month !== undefined)
+    if (cycle_month !== undefined && cycle_month !== null)
       db.prepare("UPDATE employees SET cycle_month = ?, updated_at = datetime('now') WHERE id = ?")
         .run(Number(cycle_month), id);
     if (active !== undefined)
