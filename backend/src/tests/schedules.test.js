@@ -87,7 +87,7 @@ describe('POST /api/schedules/generate', () => {
   it('não sobrescreve entradas bloqueadas por padrão', async () => {
     const db = freshDb();
     const emp = createEmployee(db, { name: 'Ana' });
-    const sid = shiftId(db, 'Manhã');
+    const sid = shiftId(db, 'Diurno');
 
     // Insere entrada bloqueada manualmente
     db.prepare(
@@ -115,7 +115,7 @@ describe('PUT /api/schedules/entry/:id', () => {
   it('atualiza is_day_off de uma entrada', async () => {
     const db = freshDb();
     const emp = createEmployee(db, { name: 'Carlos' });
-    const sid = shiftId(db, 'Tarde');
+    const sid = shiftId(db, 'Noturno');
 
     const result = db
       .prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
@@ -260,7 +260,7 @@ describe('DELETE /api/schedules/month', () => {
   it('não remove entradas de outros meses', async () => {
     const db = freshDb();
     const emp = createEmployee(db, { name: 'Flávia' });
-    const sid = shiftId(db, 'Manhã');
+    const sid = shiftId(db, 'Diurno');
 
     db.prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
       .run(emp.id, sid, '2025-04-15');
