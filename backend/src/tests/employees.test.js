@@ -172,7 +172,7 @@ describe('cycle_month — POST/PUT validação', () => {
   });
 
   it('rejeita cycle_month inválido no POST', async () => {
-    for (const cm of [0, 4, 'invalido']) {
+    for (const cm of [0, 4, 'invalido', 1.5]) {
       freshDb();
       const res = await request(app).post('/api/employees').send({
         name: 'Teste',
@@ -210,6 +210,37 @@ describe('cycle_month — POST/PUT validação', () => {
     const emp = createEmployee(db, { name: 'Ciclo Inválido', setor: 'Transporte Ambulância' });
     const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_month: 5 });
     expect(res.status).toBe(400);
+    resetDb();
+  });
+
+  it('aceita cycle_month null no POST — armazena default 1', async () => {
+    freshDb();
+    const res = await request(app).post('/api/employees').send({
+      name: 'Ciclo Null',
+      setores: ['Transporte Ambulância'],
+      cycle_month: null,
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.cycle_month).toBe(1);
+    resetDb();
+  });
+
+  it('aceita cycle_month null no PUT — no-op, mantém valor atual', async () => {
+    const db = freshDb();
+    const emp = createEmployee(db, { name: 'Ciclo Reset', setor: 'Transporte Ambulância' });
+    // createEmployee não define cycle_month → default do DB é 1
+    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_month: null });
+    expect(res.status).toBe(200);
+    expect(res.body.cycle_month).toBe(1);
+    resetDb();
+  });
+
+  it('rejeita cycle_month 99 no PUT', async () => {
+    const db = freshDb();
+    const emp = createEmployee(db, { name: 'Ciclo 99', setor: 'Transporte Ambulância' });
+    const res = await request(app).put(`/api/employees/${emp.id}`).send({ cycle_month: 99 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/cycle_month/);
     resetDb();
   });
 });
