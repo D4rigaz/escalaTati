@@ -52,7 +52,9 @@ export default function EmployeeForm({ open, onOpenChange, employee, onSuccess }
         work_schedule: employee?.work_schedule ?? 'dom_sab',
         color: employee?.color ?? '#6B7280',
         cycle_month: String(employee?.cycle_month ?? 1),
-        preferred_shift_id: employee?.restRules?.preferred_shift_id ?? '',
+        preferred_shift_id: employee?.restRules?.preferred_shift_id != null
+          ? String(employee.restRules.preferred_shift_id)
+          : '',
         notes: employee?.restRules?.notes ?? '',
       });
       setSelectedSetores(employee?.setores ?? []);
