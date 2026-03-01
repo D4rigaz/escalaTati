@@ -7,7 +7,6 @@ import {
   Trash2,
   LayoutGrid,
   Table,
-  AlertTriangle,
   FileSpreadsheet,
   FileText,
 } from 'lucide-react';
@@ -40,12 +39,12 @@ export default function SchedulePage() {
     employees,
     fetchEmployees,
     addToast,
+    setWarnings,
   } = useStore();
 
   const [viewMode, setViewMode] = useState('table'); // 'calendar' | 'table'
   const [selectedEntry, setSelectedEntry] = useState(null);
   const [editOpen, setEditOpen] = useState(false);
-  const [generateWarnings, setGenerateWarnings] = useState([]);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmGenerate, setConfirmGenerate] = useState(false);
 
@@ -66,7 +65,7 @@ export default function SchedulePage() {
   const handleGenerate = async () => {
     try {
       const result = await generateSchedule(false);
-      setGenerateWarnings(result.warnings || []);
+      setWarnings(result.warnings || []);
       addToast({
         type: 'success',
         title: 'Escala gerada!',
@@ -187,27 +186,6 @@ export default function SchedulePage() {
           </button>
         </div>
       </div>
-
-      {/* Warnings */}
-      {generateWarnings.length > 0 && (
-        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2">
-          <div className="flex items-start gap-2">
-            <AlertTriangle size={16} className="text-amber-600 mt-0.5 shrink-0" />
-            <div className="text-xs text-amber-800">
-              <p className="font-semibold mb-1">Avisos da geração:</p>
-              {generateWarnings.map((w, i) => (
-                <p key={i}>{w.message}</p>
-              ))}
-            </div>
-            <button
-              className="ml-auto text-amber-500 hover:text-amber-700"
-              onClick={() => setGenerateWarnings([])}
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Main content */}
       <div className="flex-1 flex gap-0 overflow-hidden">

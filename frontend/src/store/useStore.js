@@ -179,6 +179,11 @@ const useStore = create((set, get) => ({
     set({ scheduleData: null });
   },
 
+  // ── Warning notifications ──────────────────────────────────
+  warnings: [],
+  setWarnings: (ws) => set({ warnings: ws }),
+  clearWarnings: () => set({ warnings: [] }),
+
   // ── Toast notifications ────────────────────────────────────
   toasts: [],
   addToast: (toast) => {
