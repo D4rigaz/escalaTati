@@ -9,7 +9,7 @@ export default function NotificationBell() {
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <button className="relative p-2 rounded-lg hover:bg-gray-100 transition-colors">
+        <button aria-label="Notificações" className="relative p-2 rounded-lg hover:bg-gray-100 transition-colors">
           <Bell size={20} className="text-gray-600" />
           {count > 0 && (
             <span className="absolute top-1 right-1 bg-red-500 text-white text-[10px] font-bold
