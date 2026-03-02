@@ -29,6 +29,8 @@ export const schedulesApi = {
   updateEntry: (id, data) => client.put(`/schedules/entry/${id}`, data).then((r) => r.data),
   clearMonth: (month, year) =>
     client.delete('/schedules/month', { params: { month, year } }).then((r) => r.data),
+  getGenerations: (month, year) =>
+    client.get('/schedules/generations', { params: { month, year } }).then((r) => r.data),
 };
 
 // Vacations
