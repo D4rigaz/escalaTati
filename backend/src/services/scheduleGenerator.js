@@ -64,6 +64,66 @@ export function getWeekType(cycleMonth, genMonth, weekIndex) {
 }
 
 /**
+ * Retorna o limite físico semanal CLT para o motorista.
+ * ADM: limite por número de turnos (3 ou 4) — shifts de 10h ou 12h (fallback).
+ * Não-ADM NOTURNO: limite em horas — semana 36h = 36h (3×12h), semana 42h = 42h (3×12h + 1×6h).
+ * Não-ADM DIURNO: limite em horas — sempre 36h (3×12h), sem turno extra (#65 é exclusivo de NOTURNO).
+ *
+ * @param {boolean} isAdm
+ * @param {boolean} isNoturno
+ * @param {'36h'|'42h'} weekType
+ * @returns {{ type: 'shifts'|'hours', limit: number }}
+ */
+export function getWeekLimitHours(isAdm, isNoturno, weekType) {
+  if (isAdm) {
+    // ADM usa limite de turnos (não horas) porque o gerador pode usar shifts de 10h ou 12h
+    return { type: 'shifts', limit: weekType === '36h' ? 3 : 4 };
+  }
+  // Não-ADM NOTURNO: turno extra 6h em semana 42h (#65)
+  if (isNoturno) {
+    return { type: 'hours', limit: weekType === '36h' ? 36 : 42 };
+  }
+  // Não-ADM DIURNO: sem turno extra, sempre 36h máx (3×12h)
+  return { type: 'hours', limit: 36 };
+}
+
+/**
+ * Retorna as horas trabalhadas por um employee em um intervalo semanal específico (DB).
+ * @param {object} db
+ * @param {number} employeeId
+ * @param {string} weekStart - Data inicial (yyyy-MM-dd, inclusive)
+ * @param {string} weekEnd   - Data final   (yyyy-MM-dd, inclusive)
+ * @returns {number}
+ */
+function getWeeklyHours(db, employeeId, weekStart, weekEnd) {
+  const row = db.prepare(
+    `SELECT COALESCE(SUM(st.duration_hours), 0) as total
+     FROM schedule_entries se
+     LEFT JOIN shift_types st ON se.shift_type_id = st.id
+     WHERE se.employee_id = ? AND se.date >= ? AND se.date <= ? AND se.is_day_off = 0`
+  ).get(employeeId, weekStart, weekEnd);
+  return row?.total ?? 0;
+}
+
+/**
+ * Retorna o número de turnos de trabalho (entradas não-folga) de um employee
+ * em um intervalo semanal específico (DB).
+ * @param {object} db
+ * @param {number} employeeId
+ * @param {string} weekStart
+ * @param {string} weekEnd
+ * @returns {number}
+ */
+function getWeeklyShiftCount(db, employeeId, weekStart, weekEnd) {
+  const row = db.prepare(
+    `SELECT COUNT(*) as total
+     FROM schedule_entries se
+     WHERE se.employee_id = ? AND se.date >= ? AND se.date <= ? AND se.is_day_off = 0`
+  ).get(employeeId, weekStart, weekEnd);
+  return row?.total ?? 0;
+}
+
+/**
  * Retorna o label CLT da semana usando a fase direta (sem rotação adicional por genMonth).
  * Usar em conjunto com calculateEffectiveCycleMonth.
  * @param {1|2|3} phase    - Fase retornada por calculateEffectiveCycleMonth
@@ -415,8 +475,8 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     }
   }
 
-  // Correction step — preserva lockedOffDates (férias)
-  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, lockedOffDates);
+  // Correction step — preserva lockedOffDates (férias) e respeita limite semanal CLT
+  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, lockedOffDates, weeks, effectiveCycleMonth);
 
   // Persist
   const insertEntry = db.prepare(
@@ -625,11 +685,59 @@ function getEmployeeHours(db, employeeId, startDate, endDate) {
 /**
  * Rule 16: Cobertura diurna Seg–Sab.
  * ≥2 motoristas de Hemodiálise e ≥1 de Ambulância no turno Diurno.
- * Converte folgas (não bloqueadas) dos motoristas elegíveis se necessário.
+ * Converte folgas (não bloqueadas) dos motoristas elegíveis se necessário,
+ * respeitando o limite semanal CLT de cada motorista.
  */
 function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings) {
   const startDate = dates[0];
   const endDate = dates[dates.length - 1];
+
+  // Deriva mês/ano de geração a partir da primeira data do período
+  const genYear  = parseInt(startDate.slice(0, 4));
+  const genMonth = parseInt(startDate.slice(5, 7));
+
+  // Agrupa datas em semanas (Dom–Sáb) para verificação do limite semanal CLT
+  const weeks = buildWeeks(dates);
+
+  /**
+   * Retorna o início e fim da semana à qual `date` pertence.
+   */
+  function getWeekBounds(date) {
+    const week = weeks.find((w) => w.includes(date));
+    if (!week) return null;
+    return { weekStart: week[0], weekEnd: week[week.length - 1], weekIndex: weeks.indexOf(week) };
+  }
+
+  /**
+   * Verifica se converter o candidato `emp` na data `date` para o turno `shift`
+   * ultrapassaria o limite semanal CLT do motorista.
+   * Retorna true se for SEGURO converter (limite não excedido); false caso contrário.
+   */
+  function withinWeeklyLimit(emp, date, shift) {
+    const bounds = getWeekBounds(date);
+    if (!bounds) return true; // sem contexto de semana — permite por segurança
+
+    const setores = employeeSectorsMap[emp.id] || [];
+    const isAdm = setores.includes(SETOR_ADM);
+    // Para motoristas não-ADM, Diurno não tem turno extra → isNoturno = false
+    const isNoturno = false;
+
+    const phase = calculateEffectiveCycleMonth(
+      emp.cycle_start_month ?? 1,
+      emp.cycle_start_year ?? genYear,
+      genMonth, genYear
+    );
+    const weekType = getWeekTypeFromPhase(phase, bounds.weekIndex);
+    const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
+
+    if (cltLimit.type === 'shifts') {
+      const currentShifts = getWeeklyShiftCount(db, emp.id, bounds.weekStart, bounds.weekEnd);
+      return currentShifts < cltLimit.limit;
+    }
+    // type === 'hours'
+    const currentWeekHours = getWeeklyHours(db, emp.id, bounds.weekStart, bounds.weekEnd);
+    return (currentWeekHours + shift.duration_hours) <= cltLimit.limit;
+  }
 
   for (const date of dates) {
     const dow = new Date(date + 'T12:00:00').getDay();
@@ -672,6 +780,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (!withinWeeklyLimit(emp, date, diurnoShift)) continue;
         db.prepare(
           'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
         ).run(diurnoShift.id, entry.id);
@@ -715,6 +824,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (!withinWeeklyLimit(emp, date, diurnoShift)) continue;
         db.prepare(
           'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
         ).run(diurnoShift.id, entry.id);
@@ -740,10 +850,58 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
  * Rules 21 & 22: Cobertura noturna por dia da semana.
  * Ter/Qui/Sab (dow 2,4,6): ≥2 motoristas Ambulância no Noturno.
  * Seg/Qua/Sex (dow 1,3,5): ≥1 motorista Ambulância no Noturno.
+ * Respeita o limite semanal CLT de cada motorista.
  */
 function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings) {
   const startDate = dates[0];
   const endDate = dates[dates.length - 1];
+
+  // Deriva mês/ano de geração a partir da primeira data do período
+  const genYear  = parseInt(startDate.slice(0, 4));
+  const genMonth = parseInt(startDate.slice(5, 7));
+
+  // Agrupa datas em semanas (Dom–Sáb) para verificação do limite semanal CLT
+  const weeks = buildWeeks(dates);
+
+  /**
+   * Retorna os limites da semana à qual `date` pertence.
+   */
+  function getWeekBounds(date) {
+    const week = weeks.find((w) => w.includes(date));
+    if (!week) return null;
+    return { weekStart: week[0], weekEnd: week[week.length - 1], weekIndex: weeks.indexOf(week) };
+  }
+
+  /**
+   * Verifica se converter o candidato `emp` na data `date` para o turno `shift`
+   * ultrapassaria o limite semanal CLT do motorista.
+   * Para noturno enforcement: o motorista tem turno noturno, isNoturno=true.
+   */
+  function withinWeeklyLimit(emp, date, shift) {
+    const bounds = getWeekBounds(date);
+    if (!bounds) return true;
+
+    const setores = employeeSectorsMap[emp.id] || [];
+    const isAdm = setores.includes(SETOR_ADM);
+    // O enforcement noturno converte para turno Noturno → isNoturno = true para não-ADM
+    const isNoturno = !isAdm;
+
+    const phase = calculateEffectiveCycleMonth(
+      emp.cycle_start_month ?? 1,
+      emp.cycle_start_year ?? genYear,
+      genMonth, genYear
+    );
+    const weekType = getWeekTypeFromPhase(phase, bounds.weekIndex);
+    const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
+
+    if (cltLimit.type === 'shifts') {
+      const currentShifts = getWeeklyShiftCount(db, emp.id, bounds.weekStart, bounds.weekEnd);
+      return currentShifts < cltLimit.limit;
+    }
+    // type === 'hours'
+    const currentWeekHours = getWeeklyHours(db, emp.id, bounds.weekStart, bounds.weekEnd);
+    return (currentWeekHours + shift.duration_hours) <= cltLimit.limit;
+  }
 
   for (const date of dates) {
     const dow = new Date(date + 'T12:00:00').getDay();
@@ -783,6 +941,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, noturnoShift)) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (!withinWeeklyLimit(emp, date, noturnoShift)) continue;
         db.prepare(
           'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
         ).run(noturnoShift.id, entry.id);
@@ -808,11 +967,11 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
  * Rule 19/42 (enforcement): Garante cobertura mínima de MIN_DAILY_COVERAGE motoristas por dia.
  * @exported para testes unitários
  * Loop por iteração até filled === MIN_DAILY_COVERAGE, re-buscando folgas a cada volta.
- * Passo 1: converte folga respeitando restrições de descanso e work_schedule=seg_sex.
- * Passo 2 (fallback): ignora MIN_REST_HOURS e consecutivos; ainda respeita seg_sex.
+ * Passo 1: converte folga respeitando restrições de descanso, work_schedule=seg_sex e limite CLT semanal.
+ * Passo 2 (fallback): ignora MIN_REST_HOURS e consecutivos; ainda respeita seg_sex e limite CLT semanal.
  *   Emite sem_motorista_forcado (1º) ou segundo_motorista_forcado (2º+).
  * Passo 3 (emergência): força até candidatos seg_sex em Sáb/Dom quando não há outro.
- *   Emite warning sem_motorista_forcado_seg_sex para rastreabilidade.
+ *   Ainda respeita limite CLT semanal. Emite warning sem_motorista_forcado_seg_sex para rastreabilidade.
  * Emite sem_motorista (filled=0) ou cobertura_minima_insuficiente (filled>0 mas <MIN)
  *   quando não há candidatos disponíveis.
  */
@@ -820,7 +979,17 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
   const defaultShift =
     shiftTypes.find((s) => s.duration_hours === DEFAULT_SHIFT_HOURS) || shiftTypes[0];
 
-  // Cache preferred shift por employee_id
+  const startDate = dates[0];
+  const endDate   = dates[dates.length - 1];
+
+  // Deriva mês/ano de geração a partir da primeira data do período
+  const genYear  = parseInt(startDate.slice(0, 4));
+  const genMonth = parseInt(startDate.slice(5, 7));
+
+  // Agrupa datas em semanas (Dom–Sáb) para verificação do limite semanal CLT
+  const weeks = buildWeeks(dates);
+
+  // Cache preferred shift por employee_id (definido antes de withinWeeklyLimit que o referencia)
   const preferredShiftCache = {};
   const getShiftForEmp = (emp) => {
     if (preferredShiftCache[emp.id] !== undefined) return preferredShiftCache[emp.id];
@@ -839,6 +1008,47 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
     return fallback;
   };
 
+  /**
+   * Retorna os limites da semana à qual `date` pertence.
+   */
+  function getWeekBounds(date) {
+    const week = weeks.find((w) => w.includes(date));
+    if (!week) return null;
+    return { weekStart: week[0], weekEnd: week[week.length - 1], weekIndex: weeks.indexOf(week) };
+  }
+
+  /**
+   * Verifica se converter o candidato `emp` na data `date` para o turno `shift`
+   * ultrapassaria o limite semanal CLT do motorista.
+   * Retorna true se for SEGURO converter (limite não excedido); false caso contrário.
+   */
+  function withinWeeklyLimit(emp, date, shift) {
+    const bounds = getWeekBounds(date);
+    if (!bounds) return true;
+
+    const setores = employeeSectorsMap[emp.id] || [];
+    const isAdm = setores.includes(SETOR_ADM);
+    // Usa o turno preferido para determinar isNoturno
+    const empShift = getShiftForEmp(emp);
+    const isNoturno = !isAdm && empShift?.name === SHIFT_NOTURNO_NAME;
+
+    const phase = calculateEffectiveCycleMonth(
+      emp.cycle_start_month ?? 1,
+      emp.cycle_start_year ?? genYear,
+      genMonth, genYear
+    );
+    const weekType = getWeekTypeFromPhase(phase, bounds.weekIndex);
+    const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
+
+    if (cltLimit.type === 'shifts') {
+      const currentShifts = getWeeklyShiftCount(db, emp.id, bounds.weekStart, bounds.weekEnd);
+      return currentShifts < cltLimit.limit;
+    }
+    // type === 'hours'
+    const currentWeekHours = getWeeklyHours(db, emp.id, bounds.weekStart, bounds.weekEnd);
+    return (currentWeekHours + shift.duration_hours) <= cltLimit.limit;
+  }
+
   for (const date of dates) {
     const initialCount = db
       .prepare(
@@ -851,8 +1061,6 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
 
     const dow = new Date(date + 'T12:00:00').getDay();
     const isWeekend = dow === 0 || dow === 6;
-    const startDate = dates[0];
-    const endDate   = dates[dates.length - 1];
 
     let filled = initialCount;
 
@@ -905,13 +1113,14 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
 
       const isSecond = filled > 0;
 
-      // Passo 1: com restrições de descanso e cap de horas (respeita seg_sex)
+      // Passo 1: com restrições de descanso, cap de horas e limite CLT semanal (respeita seg_sex)
       let assigned = false;
       for (const { folgaId, emp } of candidates) {
         if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         const shift = getShiftForEmp(emp);
         if (!canAssignShift(db, emp.id, date, shift)) continue;
+        if (!withinWeeklyLimit(emp, date, shift)) continue;
         db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
           .run(shift.id, folgaId);
         filled++;
@@ -920,12 +1129,13 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       }
       if (assigned) continue;
 
-      // Passo 2: forçado — ignora restrições de descanso e consecutivos (respeita seg_sex e cap)
+      // Passo 2: forçado — ignora restrições de descanso e consecutivos; respeita seg_sex, cap e limite CLT semanal
       let forced = false;
       for (const { folgaId, emp } of candidates) {
         if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         const shift = getShiftForEmp(emp);
+        if (!withinWeeklyLimit(emp, date, shift)) continue;
         db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
           .run(shift.id, folgaId);
         warnings.push({
@@ -943,9 +1153,11 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       if (forced) continue;
 
       // Passo 3 (emergência): força candidato seg_sex em Sáb/Dom — equipe insuficiente de dom_sab
+      // Ainda respeita limite CLT semanal.
       for (const { folgaId, emp } of candidates) {
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         const shift = getShiftForEmp(emp);
+        if (!withinWeeklyLimit(emp, date, shift)) continue;
         db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
           .run(shift.id, folgaId);
         warnings.push({
@@ -974,7 +1186,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
   }
 }
 
-function buildWeeks(dates) {
+export function buildWeeks(dates) {
   const weeks = [];
   let currentWeek = [];
 
@@ -1095,9 +1307,64 @@ function hasAdequateRest(allEntries, targetEntry, shift, shiftMap) {
   return true;
 }
 
-export function correctHours(entries, shiftTypes, shiftMap, currentHours, target, preferredShift = null, lockedOffDates = new Set()) {
+export function correctHours(
+  entries, shiftTypes, shiftMap, currentHours, target,
+  preferredShift = null, lockedOffDates = new Set(),
+  weeks = [], effectiveCycleMonth = null
+) {
   const diff = currentHours - target;
   if (Math.abs(diff) <= 6) return entries;
+
+  // Determina se o motorista é ADM ou NOTURNO com base no turno preferido
+  const isAdm     = preferredShift?.name === SHIFT_ADM_NAME;
+  const isNoturno = preferredShift?.name === SHIFT_NOTURNO_NAME;
+
+  // Monta mapa semana → {weekStart, weekEnd, weekIndex, weekType, cltLimit}
+  // para verificação do limite CLT por semana em conversões de folga→trabalho.
+  const weekMeta = weeks.map((week, wi) => {
+    const weekType = effectiveCycleMonth !== null
+      ? getWeekTypeFromPhase(effectiveCycleMonth, wi)
+      : '42h'; // fallback conservador sem contexto de fase
+    return {
+      weekStart: week[0],
+      weekEnd: week[week.length - 1],
+      weekIndex: wi,
+      weekType,
+      cltLimit: getWeekLimitHours(isAdm, isNoturno, weekType),
+    };
+  });
+
+  // Retorna metadados da semana à qual uma data pertence.
+  function weekMetaFor(date) {
+    return weekMeta.find((wm) => date >= wm.weekStart && date <= wm.weekEnd) ?? null;
+  }
+
+  // Conta horas de trabalho in-memory em uma semana.
+  function inMemoryWeeklyHours(weekStart, weekEnd) {
+    return entries.reduce((sum, e) => {
+      if (e.is_day_off || !e.shift_type_id) return sum;
+      if (e.date < weekStart || e.date > weekEnd) return sum;
+      return sum + (shiftMap[e.shift_type_id]?.duration_hours || 0);
+    }, 0);
+  }
+
+  // Conta turnos de trabalho in-memory em uma semana (usado para limite ADM por count).
+  function inMemoryWeeklyShiftCount(weekStart, weekEnd) {
+    return entries.filter((e) => {
+      if (e.is_day_off || !e.shift_type_id) return false;
+      return e.date >= weekStart && e.date <= weekEnd;
+    }).length;
+  }
+
+  // Verifica se adicionar `shiftToAdd` respeitaria o limite CLT semanal, dado o meta-objeto da semana.
+  function wouldExceedWeeklyLimit(wm, shiftToAdd) {
+    const { cltLimit } = wm;
+    if (cltLimit.type === 'shifts') {
+      return inMemoryWeeklyShiftCount(wm.weekStart, wm.weekEnd) >= cltLimit.limit;
+    }
+    // type === 'hours'
+    return inMemoryWeeklyHours(wm.weekStart, wm.weekEnd) + shiftToAdd.duration_hours > cltLimit.limit;
+  }
 
   const workEntries = entries.filter((e) => !e.is_day_off && e.shift_type_id);
   const offEntries  = entries.filter((e) => e.is_day_off);
@@ -1116,7 +1383,7 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
     }
   } else if (diff < -6) {
     // Too few hours: convert off days to the sector's preferred shift
-    // Preserves lockedOffDates (férias, etc.)
+    // Preserves lockedOffDates (férias, etc.) and weekly CLT limits.
     const shiftToAdd =
       preferredShift ||
       shiftTypes.find((s) => s.duration_hours === DEFAULT_SHIFT_HOURS) ||
@@ -1127,6 +1394,13 @@ export function correctHours(entries, shiftTypes, shiftMap, currentHours, target
       if (lockedOffDates.has(entry.date)) continue;
       if (!hasAdequateRest(entries, entry, shiftToAdd, shiftMap)) continue;
       if (wouldExceedConsecutive(entries, entry)) continue;
+
+      // Verificação do limite semanal CLT
+      if (weeks.length > 0 && effectiveCycleMonth !== null) {
+        const wm = weekMetaFor(entry.date);
+        if (wm && wouldExceedWeeklyLimit(wm, shiftToAdd)) continue;
+      }
+
       entry.is_day_off = 0;
       entry.shift_type_id = shiftToAdd.id;
       deficit -= shiftToAdd.duration_hours;

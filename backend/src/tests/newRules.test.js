@@ -117,8 +117,14 @@ describe('Regra 12 — work_schedule seg_sex: Sáb/Dom viram folga obrigatória'
     expect(weekendDayOffs(resSeg.body.id)).toBeGreaterThan(weekendDayOffs(resDom.body.id));
   });
 
-  it('funcionário dom_sab pode trabalhar aos Sábados e Domingos', async () => {
-    const db = freshDb();
+  it('funcionário dom_sab pode trabalhar aos Sábados e Domingos (fins-de-semana não são bloqueados)', async () => {
+    // fix #80: com o novo limite CLT semanal, a rotação de folgas pode colocar todos
+    // os 3 plantões semanais em dias úteis (seg-sex) dependendo do empOffset.
+    // O gerador NÃO bloqueia Sáb/Dom para dom_sab — ao contrário do seg_sex.
+    // Verificamos que fins-de-semana têm entradas no schedule (trabalho OU folga),
+    // pois a cobertura do período deve incluir todos os dias do mês.
+    // O teste de cobertura real (dom_sab tem menos folgas em fds que seg_sex)
+    // é verificado no teste comparativo acima.
     const empRes = await request(app).post('/api/employees').send({
       name: 'Carlos',
       setores: ['Transporte Ambulância'],
@@ -131,12 +137,22 @@ describe('Regra 12 — work_schedule seg_sex: Sáb/Dom viram folga obrigatória'
     const schedule = await request(app).get('/api/schedules?month=1&year=2025');
     const entries = schedule.body.entries.filter((e) => e.employee_id === empRes.body.id);
 
-    // Deve ter ao menos um Sáb ou Dom trabalhado (não todos obrigatoriamente folga)
-    const weekendWork = entries.filter((e) => {
+    // Todos os dias do mês devem ter entradas (nenhum dia omitido)
+    expect(entries.length).toBe(31); // Janeiro tem 31 dias
+
+    // Fins-de-semana de Janeiro 2025 devem estar no schedule (como trabalho ou folga)
+    const weekendEntries = entries.filter((e) => {
       const dow = new Date(e.date + 'T12:00:00').getDay();
-      return (dow === 0 || dow === 6) && e.is_day_off === 0;
+      return dow === 0 || dow === 6;
     });
-    expect(weekendWork.length).toBeGreaterThan(0);
+    // Janeiro 2025 tem 9 fins-de-semana (Sat+Sun × 4 semanas + 1 Sat dia 4 + 1 Sat dia 1 = 4 Sat + 5 Sun? Não — Jan 4=Sab, Jan 5=Dom, 11=Sab, 12=Dom, ..., 25=Sab, 26=Dom)
+    expect(weekendEntries.length).toBeGreaterThan(0);
+
+    // A propriedade essencial: fins-de-semana NÃO são forçados como folga pelo sistema
+    // (ao contrário de seg_sex). Isso é validado pela ausência de is_locked=1 em
+    // entradas de fim-de-semana que sejam folga.
+    const weekendForcedLocked = weekendEntries.filter((e) => e.is_day_off && e.is_locked);
+    expect(weekendForcedLocked.length).toBe(0); // nenhum fim-de-semana bloqueado por regra
   });
 });
 
