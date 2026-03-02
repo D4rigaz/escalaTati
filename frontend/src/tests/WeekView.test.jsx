@@ -75,7 +75,7 @@ describe('WeekView — label de duração do turno', () => {
     expect(label).toHaveClass('text-amber-700');
   });
 
-  it('label "12h" não tem classe de destaque (text-gray-600)', () => {
+  it('label "12h" tem cor de alto contraste (text-gray-900)', () => {
     const entry = makeEntry({ duration_hours: 12 });
     render(
       <WeekView
@@ -85,8 +85,20 @@ describe('WeekView — label de duração do turno', () => {
       />
     );
     const label = screen.getByText('12h', { selector: 'span' });
-    expect(label).toHaveClass('text-gray-600');
+    expect(label).toHaveClass('text-gray-900');
     expect(label).not.toHaveClass('text-amber-700');
+  });
+
+  it('label de duração não renderiza quando duration_hours é null (null guard)', () => {
+    const entry = makeEntry({ duration_hours: null, is_day_off: 0 });
+    render(
+      <WeekView
+        scheduleData={makeScheduleData([entry])}
+        currentMonth={MONTH}
+        currentYear={YEAR}
+      />
+    );
+    expect(screen.queryByText('h', { selector: 'span' })).not.toBeInTheDocument();
   });
 
   it('célula de folga não exibe label de duração', () => {
