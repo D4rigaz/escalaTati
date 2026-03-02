@@ -131,6 +131,13 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
                       }
                     >
                       <span className="font-bold text-gray-800">{initial}</span>
+                      <span
+                        className={`block text-[8px] leading-none mt-0.5 font-semibold ${
+                          entry.duration_hours === 6 ? 'text-amber-700' : 'text-gray-600'
+                        }`}
+                      >
+                        {entry.duration_hours}h
+                      </span>
                       {entry.is_locked ? (
                         <span className="absolute top-0 right-0 text-gray-600">
                           <Lock size={8} />
