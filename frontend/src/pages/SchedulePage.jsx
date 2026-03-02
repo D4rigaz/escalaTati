@@ -16,6 +16,7 @@ import useStore from '../store/useStore.js';
 import CalendarView from '../components/schedule/CalendarView.jsx';
 import WeekView from '../components/schedule/WeekView.jsx';
 import MonthSummary from '../components/schedule/MonthSummary.jsx';
+import GenerationHistory from '../components/schedule/GenerationHistory.jsx';
 import EntryEditPopover from '../components/schedule/EntryEditPopover.jsx';
 import ConfirmDialog from '../components/shared/ConfirmDialog.jsx';
 import { exportApi } from '../api/client.js';
@@ -224,6 +225,12 @@ export default function SchedulePage() {
         {/* Sidebar summary */}
         <div className="w-56 border-l border-gray-200 p-4 overflow-y-auto bg-gray-50 shrink-0">
           <MonthSummary totals={scheduleData?.totals} />
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              Histórico
+            </h3>
+            <GenerationHistory month={currentMonth} year={currentYear} />
+          </div>
         </div>
       </div>
 
