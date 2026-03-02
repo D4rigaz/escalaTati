@@ -116,14 +116,14 @@ describe('Cenário A — Não-ADM: cycle_start não afeta plantões físicos', (
 //   a adição o cap é atingido e enforcement para.
 
 describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por semana', () => {
-  it('ADM cycle_start=Dez/2024 (phase 3): semana 1 de Fev/2025 (36h label) tem 4 plantões (enforcement); semana 2 (42h label) tem 3 plantões (correctHours remove 1)', async () => {
+  it('ADM cycle_start=Dez/2024 (phase 3): semana 1 de Fev/2025 (36h label) tem 3 plantões; semana 2 (42h label) tem 4 plantões; enforcement não viola limite CLT', async () => {
     // cycle_start=Dez/2024 → phase 3 → patterns[3]=['42h','36h','42h','42h']
-    // sem 1=36h (3 turnos base), sem 2=42h (4 turnos base).
+    // sem 0=42h (1 dia, 1 turno), sem 1=36h (3 turnos base), sem 2=42h (4 turnos base).
     //
-    // Com turnos de 12h (Diurno — #64), o total bruto em Fev é > 160h → correctHours
-    // remove 1 plantão da semana 2 → week2=3. O enforcement adiciona 1 em week1 (Feb 2
-    // Domingo forçado via Passo 2), elevando week1 para 4.
-    // Cap de 168h atingido após enforcement → sem alterações adicionais.
+    // fix #80: enforcement e correctHours respeitam o limite CLT semanal.
+    // Semana 1 (36h label) → limite ADM = 3 turnos → enforcement NÃO adiciona 4º turno.
+    // Total gerado = 10+30+40+40+40 = 160h → correctHours não altera.
+    // Enforcement não pode adicionar mais (cap 160h atingido).
     const empRes = await request(app)
       .post('/api/employees')
       .send({ name: 'ADM Phase3', setores: ['Transporte Administrativo'], cycle_start_month: 12, cycle_start_year: 2024 });
@@ -136,10 +136,10 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
     const entries = schedRes.body.entries;
     const empId = empRes.body.id;
 
-    // Semana 1 (36h base + 1 enforcement no Domingo inicial): 4 plantões
-    expect(workIn(entries, empId, FEV_WEEK1)).toBe(4);
-    // Semana 2 (42h base, correctHours removeu 1 plantão para ajustar 12h shifts): 3 plantões
-    expect(workIn(entries, empId, FEV_WEEK2)).toBe(3);
+    // Semana 1 (36h label → limite 3 turnos ADM): exatamente 3 plantões — enforcement respeitou o limite
+    expect(workIn(entries, empId, FEV_WEEK1)).toBe(3);
+    // Semana 2 (42h label → limite 4 turnos ADM): exatamente 4 plantões
+    expect(workIn(entries, empId, FEV_WEEK2)).toBe(4);
   });
 
   it('ADM cycle_start=Jan/2025 (phase 2): semana 2 de Fev/2025 tem label 36h → exatamente 3 plantões; semana 1 (42h) tem mais plantões que semana 2 (36h)', async () => {
