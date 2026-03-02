@@ -41,6 +41,7 @@ const resetStore = () => {
     scheduleGenerating: false,
     scheduleError: null,
     toasts: [],
+    warnings: [],
   });
 };
 
