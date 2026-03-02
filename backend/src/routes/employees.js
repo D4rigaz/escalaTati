@@ -295,6 +295,15 @@ router.post('/:id/vacations', (req, res) => {
     return res.status(400).json({ error: 'end_date deve ser >= start_date' });
   }
 
+  const overlap = db
+    .prepare(
+      'SELECT id FROM employee_vacations WHERE employee_id = ? AND start_date <= ? AND end_date >= ?'
+    )
+    .get(id, end_date, start_date);
+  if (overlap) {
+    return res.status(400).json({ error: `Período de férias conflita com férias existente (ID ${overlap.id})` });
+  }
+
   const result = db
     .prepare(
       'INSERT INTO employee_vacations (employee_id, start_date, end_date, notes) VALUES (?, ?, ?, ?)'
@@ -330,6 +339,15 @@ router.put('/:id/vacations/:vid', (req, res) => {
   }
   if (newEnd < newStart) {
     return res.status(400).json({ error: 'end_date deve ser >= start_date' });
+  }
+
+  const overlap = db
+    .prepare(
+      'SELECT id FROM employee_vacations WHERE employee_id = ? AND id != ? AND start_date <= ? AND end_date >= ?'
+    )
+    .get(id, vid, newEnd, newStart);
+  if (overlap) {
+    return res.status(400).json({ error: `Período de férias conflita com férias existente (ID ${overlap.id})` });
   }
 
   db.prepare(
