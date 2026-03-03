@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import WeekView from '../components/schedule/WeekView.jsx';
 
 const MONTH = 3;
@@ -179,5 +179,123 @@ describe('WeekView — renderização base', () => {
       />
     );
     expect(screen.getByText('F')).toBeInTheDocument();
+  });
+});
+
+// ── Cabeçalho de dias (issue #73) ─────────────────────────────────────────────
+
+describe('WeekView — cabeçalho de dias (issue #73)', () => {
+  it('exibe todos os 7 labels de dias da semana no cabeçalho', () => {
+    // Março 2026 começa no domingo — todos os 7 labels aparecem ao menos uma vez.
+    render(
+      <WeekView
+        scheduleData={makeScheduleData([makeEntry()])}
+        currentMonth={MONTH}
+        currentYear={YEAR}
+      />
+    );
+    for (const label of ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']) {
+      expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── Interação de clique (issue #73) ───────────────────────────────────────────
+
+describe('WeekView — interação de clique (issue #73)', () => {
+  it('clique em célula de turno chama onEntryClick com a entry correta', () => {
+    const onEntryClick = vi.fn();
+    const entry = makeEntry();
+    render(
+      <WeekView
+        scheduleData={makeScheduleData([entry])}
+        currentMonth={MONTH}
+        currentYear={YEAR}
+        onEntryClick={onEntryClick}
+      />
+    );
+    // Clica na inicial do turno ('N' de Noturno) — evento burbulha até o td
+    fireEvent.click(screen.getByText('N'));
+    expect(onEntryClick).toHaveBeenCalledOnce();
+    expect(onEntryClick).toHaveBeenCalledWith(entry);
+  });
+
+  it('clique em célula de folga chama onEntryClick com a entry correta', () => {
+    const onEntryClick = vi.fn();
+    const entry = makeEntry({ is_day_off: 1 });
+    render(
+      <WeekView
+        scheduleData={makeScheduleData([entry])}
+        currentMonth={MONTH}
+        currentYear={YEAR}
+        onEntryClick={onEntryClick}
+      />
+    );
+    fireEvent.click(screen.getByText('F'));
+    expect(onEntryClick).toHaveBeenCalledOnce();
+    expect(onEntryClick).toHaveBeenCalledWith(entry);
+  });
+
+  it('célula bloqueada exibe ícone de cadeado (Lock svg)', () => {
+    const entry = makeEntry({ is_locked: 1 });
+    const { container } = render(
+      <WeekView
+        scheduleData={makeScheduleData([entry])}
+        currentMonth={MONTH}
+        currentYear={YEAR}
+      />
+    );
+    // Lock de lucide-react renderiza como SVG
+    expect(container.querySelector('svg')).toBeInTheDocument();
+  });
+
+  it('célula não-bloqueada não exibe ícone de cadeado', () => {
+    const entry = makeEntry({ is_locked: 0 });
+    const { container } = render(
+      <WeekView
+        scheduleData={makeScheduleData([entry])}
+        currentMonth={MONTH}
+        currentYear={YEAR}
+      />
+    );
+    expect(container.querySelector('svg')).not.toBeInTheDocument();
+  });
+});
+
+// ── Coluna de total (issue #73) ────────────────────────────────────────────────
+
+describe('WeekView — coluna de total (issue #73)', () => {
+  it('total do motorista exibe soma das horas de trabalho do mês', () => {
+    const entries = [
+      makeEntry({ id: 1, date: '2026-03-03', duration_hours: 12 }),
+      makeEntry({ id: 2, date: '2026-03-05', duration_hours: 12 }),
+      makeEntry({ id: 3, date: '2026-03-07', duration_hours: 12 }),
+    ];
+    render(
+      <WeekView scheduleData={makeScheduleData(entries)} currentMonth={MONTH} currentYear={YEAR} />
+    );
+    expect(screen.getByText('36h', { selector: 'td' })).toBeInTheDocument();
+  });
+
+  it('total dentro de ±12h de 160h tem classe text-green-700', () => {
+    // 13 × 12h = 156h — desvio de -4h, dentro do intervalo ±12h
+    const entries = Array.from({ length: 13 }, (_, i) => makeEntry({
+      id: i + 1,
+      date: `2026-03-${String(i + 1).padStart(2, '0')}`,
+      duration_hours: 12,
+    }));
+    render(
+      <WeekView scheduleData={makeScheduleData(entries)} currentMonth={MONTH} currentYear={YEAR} />
+    );
+    expect(screen.getByText('156h', { selector: 'td' })).toHaveClass('text-green-700');
+  });
+
+  it('total fora de ±12h de 160h tem classe text-orange-600', () => {
+    // 1 × 12h = 12h — desvio de -148h, fora do intervalo ±12h
+    const entry = makeEntry({ duration_hours: 12 });
+    render(
+      <WeekView scheduleData={makeScheduleData([entry])} currentMonth={MONTH} currentYear={YEAR} />
+    );
+    expect(screen.getByText('12h', { selector: 'td' })).toHaveClass('text-orange-600');
   });
 });
