@@ -76,6 +76,84 @@ describe('correctHours', () => {
     expect(converted.length).toBeGreaterThan(5); // folgas boas foram convertidas
   });
 
+  // ── Issue #82 — fixes ────────────────────────────────────────────────────────
+
+  it('hasAdequateRest: aceita posição emendado Noturno→Manhã (restMs=0) ao converter folga', () => {
+    // Jan 5 Noturno (19:00→Jan 6 07:00); Jan 6 off está em posição emendado (0h rest).
+    // Com fix #1: isValidEmendado(Noturno, Manhã)=true + 12+6≤18 → aceita.
+    // Sem fix: restMs=0 < 24h → rejeitaria → motorista não receberia o turno.
+    const noturno = { id: 1, name: 'Noturno', duration_hours: 12, start_time: '19:00' };
+    const manha   = { id: 2, name: 'Manhã',   duration_hours: 6,  start_time: '07:00' };
+    const localShiftTypes = [noturno, manha];
+    const localShiftMap   = { 1: noturno, 2: manha };
+
+    const entries = [
+      { employee_id: 1, date: '2025-01-05', is_day_off: 0, shift_type_id: 1, is_locked: 0 },
+      { employee_id: 1, date: '2025-01-06', is_day_off: 1, shift_type_id: null, is_locked: 0 },
+      { employee_id: 1, date: '2025-01-07', is_day_off: 1, shift_type_id: null, is_locked: 0 },
+    ];
+    // currentHours=12, target=24, diff=-12 < -6 → tenta converter folgas; preferredShift=Manhã
+    correctHours(entries, localShiftTypes, localShiftMap, 12, 24, manha);
+
+    const jan6 = entries.find((e) => e.date === '2025-01-06');
+    expect(jan6.is_day_off).toBe(0);          // convertida — emendado Noturno→Manhã válido
+    expect(jan6.shift_type_id).toBe(manha.id);
+  });
+
+  it('diff>6: remove turno de 12h antes do turno extra de 6h (Manhã) ao reduzir excesso', () => {
+    // 6h Manhã em Jan 1 (entrada mais cedo) + 14×12h Noturno = 174h; diff=14 > 6.
+    // Com fix #2 (sort desc): remove um Noturno 12h primeiro → 162h, excess=2 ≤ 6 → Manhã preservada.
+    // Sem fix (ordem de inserção): remove Manhã 6h primeiro → 168h, excess=8 → remove outro 12h → 156h.
+    const noturno = { id: 1, name: 'Noturno', duration_hours: 12 };
+    const manha   = { id: 2, name: 'Manhã',   duration_hours: 6  };
+    const localShiftTypes = [noturno, manha];
+    const localShiftMap   = { 1: noturno, 2: manha };
+
+    const entries = [
+      { employee_id: 1, date: '2025-01-01', is_day_off: 0, shift_type_id: 2, is_locked: 0 }, // 6h
+    ];
+    for (let i = 2; i <= 15; i++) {
+      entries.push({ employee_id: 1, date: `2025-01-${String(i).padStart(2,'0')}`, is_day_off: 0, shift_type_id: 1, is_locked: 0 });
+    }
+
+    correctHours(entries, localShiftTypes, localShiftMap, 174, 160);
+
+    const jan1 = entries.find((e) => e.date === '2025-01-01');
+    expect(jan1.is_day_off).toBe(0); // Manhã 6h preservada — Noturno 12h foi removido primeiro
+    expect(jan1.shift_type_id).toBe(manha.id);
+  });
+
+  it('diff<-6 NOTURNO em semana 42h: usa Manhã (6h) como fallback quando 12h excederia limite semanal', () => {
+    // 3×Noturno (36h) em semana 42h + 1 off em posição emendado (Jan 6 = dia após Jan 5 Noturno).
+    // Adicionarnoturno: 36+12=48 > 42 → limite excedido → fallback para Manhã 6h (Fix #3).
+    // Jan 6 emendado: restMs=0, Noturno→Manhã válido → aceito (Fix #1).
+    const noturno = { id: 1, name: 'Noturno', duration_hours: 12, start_time: '19:00' };
+    const manha   = { id: 2, name: 'Manhã',   duration_hours: 6,  start_time: '07:00' };
+    const tarde   = { id: 3, name: 'Tarde',   duration_hours: 6,  start_time: '13:00' };
+    const localShiftTypes = [noturno, manha, tarde];
+    const localShiftMap   = { 1: noturno, 2: manha, 3: tarde };
+
+    const entries = [
+      { employee_id: 1, date: '2025-01-05', is_day_off: 0, shift_type_id: 1, is_locked: 0 }, // Dom Noturno
+      { employee_id: 1, date: '2025-01-06', is_day_off: 1, shift_type_id: null, is_locked: 0 }, // Seg off (emendado)
+      { employee_id: 1, date: '2025-01-07', is_day_off: 0, shift_type_id: 1, is_locked: 0 }, // Ter Noturno
+      { employee_id: 1, date: '2025-01-08', is_day_off: 1, shift_type_id: null, is_locked: 0 }, // Qua off
+      { employee_id: 1, date: '2025-01-09', is_day_off: 0, shift_type_id: 1, is_locked: 0 }, // Qui Noturno
+      { employee_id: 1, date: '2025-01-10', is_day_off: 1, shift_type_id: null, is_locked: 0 }, // Sex off
+      { employee_id: 1, date: '2025-01-11', is_day_off: 1, shift_type_id: null, is_locked: 0 }, // Sab off
+    ];
+
+    // 1 semana: Jan 5–11; effectiveCycleMonth=2 → getWeekTypeFromPhase(2,0)='42h'
+    const weeks = [['2025-01-05','2025-01-06','2025-01-07','2025-01-08','2025-01-09','2025-01-10','2025-01-11']];
+
+    // currentHours=36, target=84, diff=-48 < -6 → tenta converter folgas com preferredShift=Noturno
+    correctHours(entries, localShiftTypes, localShiftMap, 36, 84, noturno, new Set(), weeks, 2);
+
+    const jan6 = entries.find((e) => e.date === '2025-01-06');
+    expect(jan6.is_day_off).toBe(0);          // convertida via fallback 6h
+    expect(jan6.shift_type_id).toBe(manha.id); // Manhã (primeiro fallback) escolhida
+  });
+
   it('não converte folga que criaria mais de 6 dias consecutivos de trabalho', () => {
     // Turno sem start_time — wouldExceedConsecutive opera por data de calendário (independe de start_time)
     const turno = { id: 1, name: 'Noturno', duration_hours: 12 };

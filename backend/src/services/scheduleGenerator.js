@@ -1285,7 +1285,12 @@ function hasAdequateRest(allEntries, targetEntry, shift, shiftMap) {
       const newStart = computeShiftStart(targetDate, shift);
       if (prevEnd && newStart) {
         const restMs = newStart - prevEnd;
-        if (restMs < MIN_REST_HOURS * 3_600_000) return false;
+        if (restMs === 0) {
+          if (!isValidEmendado(prevShift.name, shift.name)) return false;
+          if (prevShift.duration_hours + shift.duration_hours > MAX_CONSECUTIVE_HOURS) return false;
+        } else if (restMs < 0 || restMs < MIN_REST_HOURS * 3_600_000) {
+          return false;
+        }
       }
     }
   }
@@ -1299,7 +1304,12 @@ function hasAdequateRest(allEntries, targetEntry, shift, shiftMap) {
       const nextStart = computeShiftStart(next.date, nextShift);
       if (newEnd && nextStart) {
         const restMs = nextStart - newEnd;
-        if (restMs < MIN_REST_HOURS * 3_600_000) return false;
+        if (restMs === 0) {
+          if (!isValidEmendado(shift.name, nextShift.name)) return false;
+          if (shift.duration_hours + nextShift.duration_hours > MAX_CONSECUTIVE_HOURS) return false;
+        } else if (restMs < 0 || restMs < MIN_REST_HOURS * 3_600_000) {
+          return false;
+        }
       }
     }
   }
@@ -1366,7 +1376,10 @@ export function correctHours(
     return inMemoryWeeklyHours(wm.weekStart, wm.weekEnd) + shiftToAdd.duration_hours > cltLimit.limit;
   }
 
-  const workEntries = entries.filter((e) => !e.is_day_off && e.shift_type_id);
+  // Ao remover turnos (diff > 6), remover primeiro os de maior duração (12h antes de 6h extra).
+  const workEntries = entries
+    .filter((e) => !e.is_day_off && e.shift_type_id)
+    .sort((a, b) => (shiftMap[b.shift_type_id]?.duration_hours || 0) - (shiftMap[a.shift_type_id]?.duration_hours || 0));
   const offEntries  = entries.filter((e) => e.is_day_off);
 
   if (diff > 6) {
@@ -1388,22 +1401,42 @@ export function correctHours(
       preferredShift ||
       shiftTypes.find((s) => s.duration_hours === DEFAULT_SHIFT_HOURS) ||
       shiftTypes[0];
+
+    // Fallback 6h (Manhã/Tarde) para NOTURNO em semana 42h — quando o turno preferido (12h)
+    // excederia o limite semanal de 42h já parcialmente preenchido por 3×12h=36h.
+    const manhaFallback = isNoturno ? shiftTypes.find((s) => s.name === SHIFT_MANHA_NAME) : null;
+    const tardeFallback = isNoturno ? shiftTypes.find((s) => s.name === SHIFT_TARDE_NAME) : null;
+    const sixHourFallbacks = [manhaFallback, tardeFallback].filter(Boolean);
+
     let deficit = Math.abs(diff);
     for (const entry of offEntries) {
       if (deficit <= 0) break;
       if (lockedOffDates.has(entry.date)) continue;
-      if (!hasAdequateRest(entries, entry, shiftToAdd, shiftMap)) continue;
-      if (wouldExceedConsecutive(entries, entry)) continue;
 
-      // Verificação do limite semanal CLT
+      // Determina o turno candidato respeitando o limite semanal CLT.
+      let candidateShift = shiftToAdd;
       if (weeks.length > 0 && effectiveCycleMonth !== null) {
         const wm = weekMetaFor(entry.date);
-        if (wm && wouldExceedWeeklyLimit(wm, shiftToAdd)) continue;
+        if (wm && wouldExceedWeeklyLimit(wm, candidateShift)) {
+          // Para NOTURNO em semana 42h, tenta turno extra de 6h como fallback.
+          if (isNoturno && wm.weekType === '42h' && sixHourFallbacks.length > 0) {
+            candidateShift = null;
+            for (const sixH of sixHourFallbacks) {
+              if (!wouldExceedWeeklyLimit(wm, sixH)) { candidateShift = sixH; break; }
+            }
+            if (!candidateShift) continue;
+          } else {
+            continue;
+          }
+        }
       }
 
+      if (!hasAdequateRest(entries, entry, candidateShift, shiftMap)) continue;
+      if (wouldExceedConsecutive(entries, entry)) continue;
+
       entry.is_day_off = 0;
-      entry.shift_type_id = shiftToAdd.id;
-      deficit -= shiftToAdd.duration_hours;
+      entry.shift_type_id = candidateShift.id;
+      deficit -= candidateShift.duration_hours;
     }
   }
 
