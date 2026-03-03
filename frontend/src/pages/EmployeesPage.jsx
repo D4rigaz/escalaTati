@@ -5,9 +5,12 @@ import EmployeeCard from '../components/employees/EmployeeCard.jsx';
 import EmployeeForm from '../components/employees/EmployeeForm.jsx';
 import ConfirmDialog from '../components/shared/ConfirmDialog.jsx';
 
+const SETORES = ['Transporte Ambulância', 'Transporte Hemodiálise', 'Transporte Administrativo'];
+
 export default function EmployeesPage() {
   const { employees, employeesLoading, fetchEmployees, deleteEmployee, shiftTypes, fetchShiftTypes, addToast } = useStore();
   const [search, setSearch] = useState('');
+  const [filterSetor, setFilterSetor] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -17,12 +20,13 @@ export default function EmployeesPage() {
     fetchShiftTypes();
   }, []);
 
-  const filtered = employees.filter(
-    (e) =>
-      e.name.toLowerCase().includes(search.toLowerCase()) ||
-      e.cargo.toLowerCase().includes(search.toLowerCase()) ||
-      (e.setores || []).some((s) => s.toLowerCase().includes(search.toLowerCase()))
-  );
+  const hasFilters = search.trim() !== '' || filterSetor !== '';
+
+  const filtered = employees.filter((e) => {
+    const matchName = search.trim() === '' || e.name.toLowerCase().includes(search.toLowerCase());
+    const matchSetor = filterSetor === '' || (e.setores || []).includes(filterSetor);
+    return matchName && matchSetor;
+  });
 
   const handleEdit = (employee) => {
     setEditingEmployee(employee);
@@ -62,15 +66,36 @@ export default function EmployeesPage() {
         </button>
       </div>
 
-      {/* Search */}
-      <div className="relative mb-6 max-w-sm">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          className="input pl-9"
-          placeholder="Buscar por nome, cargo ou setor..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+      {/* Search + Setor filter */}
+      <div className="flex flex-wrap gap-3 mb-6">
+        <div className="relative max-w-sm flex-1 min-w-[180px]">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            className="input pl-9 w-full"
+            placeholder="Buscar por nome..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <select
+          className="input max-w-xs"
+          value={filterSetor}
+          onChange={(e) => setFilterSetor(e.target.value)}
+          aria-label="Filtrar por setor"
+        >
+          <option value="">Todos os setores</option>
+          {SETORES.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        {hasFilters && (
+          <button
+            className="btn-ghost text-sm text-gray-500"
+            onClick={() => { setSearch(''); setFilterSetor(''); }}
+          >
+            Limpar filtros
+          </button>
+        )}
       </div>
 
       {/* Content */}
@@ -80,9 +105,11 @@ export default function EmployeesPage() {
         <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-2">
           <Users size={40} className="text-gray-300" />
           <p className="text-sm">
-            {search ? 'Nenhum motorista encontrado' : 'Nenhum motorista cadastrado'}
+            {hasFilters
+              ? 'Nenhum motorista encontrado para os filtros aplicados'
+              : 'Nenhum motorista cadastrado'}
           </p>
-          {!search && (
+          {!hasFilters && (
             <button
               className="btn-primary mt-2"
               onClick={() => {
