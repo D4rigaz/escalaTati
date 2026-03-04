@@ -439,6 +439,46 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         }
       }
 
+      // Recuperação NOTURNO: se selectedWork bloqueou turnos por restrição de descanso (12h < 24h),
+      // tenta dias de selectedOff que tenham descanso adequado para completar a meta semanal.
+      // Aplicado apenas a NOTURNO: garante que semanas 42h recebam 3 plantões (não apenas 2)
+      // quando selectOffDays seleciona dias consecutivos bloqueados. Issue #86.
+      // DIURNO não precisa: limite semanal é sempre 36h e correctHours já cobre o déficit.
+      if (isNoturno) {
+        const placedThisWeek = entries.filter(
+          (e) => !e.is_day_off && e.shift_type_id && e.date >= week[0] && e.date <= week[week.length - 1]
+        ).length;
+        if (placedThisWeek < actualWorkInWeek) {
+          const needed = actualWorkInWeek - placedThisWeek;
+          let recovered = 0;
+          const convertedFromOff = new Set();
+          for (const date of selectedOff) {
+            if (recovered >= needed) break;
+            if (lockedDates.has(date) || vacationDatesForEmp.has(date)) continue;
+            const shift = selectShift(twelveHourShifts, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+            if (!shift) continue;
+            entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+            totalHours += shift.duration_hours;
+            const shiftStart = computeShiftStart(date, shift);
+            const restHours = lastShiftEnd
+              ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
+              : Infinity;
+            consecutiveHours = restHours === 0
+              ? consecutiveHours + shift.duration_hours
+              : shift.duration_hours;
+            lastShiftEnd = computeShiftEnd(date, shift);
+            lastShiftName = shift.name;
+            convertedFromOff.add(date);
+            recovered++;
+          }
+          // Remove dias convertidos de selectedOff para não serem adicionados como folga abaixo
+          for (const date of convertedFromOff) {
+            const idx = selectedOff.indexOf(date);
+            if (idx !== -1) selectedOff.splice(idx, 1);
+          }
+        }
+      }
+
       for (const date of selectedOff) {
         entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
         consecutiveHours = 0;
