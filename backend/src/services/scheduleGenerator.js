@@ -66,8 +66,8 @@ export function getWeekType(cycleMonth, genMonth, weekIndex) {
 /**
  * Retorna o limite físico semanal CLT para o motorista.
  * ADM: limite por número de turnos (3 ou 4) — shifts de 10h ou 12h (fallback).
- * Não-ADM NOTURNO: limite em horas — semana 36h = 36h (3×12h), semana 42h = 42h (3×12h + 1×6h).
- * Não-ADM DIURNO: limite em horas — sempre 36h (3×12h), sem turno extra (#65 é exclusivo de NOTURNO).
+ * Não-ADM (NOTURNO e DIURNO): limite em horas — semana 36h = 36h (3×12h), semana 42h = 42h (3×12h + 1×6h).
+ * Issue #90: turno extra 6h em semana 42h se aplica a NOTURNO e DIURNO.
  *
  * @param {boolean} isAdm
  * @param {boolean} isNoturno
@@ -79,12 +79,8 @@ export function getWeekLimitHours(isAdm, isNoturno, weekType) {
     // ADM usa limite de turnos (não horas) porque o gerador pode usar shifts de 10h ou 12h
     return { type: 'shifts', limit: weekType === '36h' ? 3 : 4 };
   }
-  // Não-ADM NOTURNO: turno extra 6h em semana 42h (#65)
-  if (isNoturno) {
-    return { type: 'hours', limit: weekType === '36h' ? 36 : 42 };
-  }
-  // Não-ADM DIURNO: sem turno extra, sempre 36h máx (3×12h)
-  return { type: 'hours', limit: 36 };
+  // Não-ADM (NOTURNO e DIURNO): turno extra 6h em semana 42h (#65, #90)
+  return { type: 'hours', limit: weekType === '36h' ? 36 : 42 };
 }
 
 /**
@@ -447,10 +443,11 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
 
       // Recuperação NOTURNO: se selectedWork bloqueou turnos por restrição de descanso (12h < 24h),
       // tenta dias de selectedOff que tenham descanso adequado para completar a meta semanal.
-      // Aplicado apenas a NOTURNO: garante que semanas 42h recebam 3 plantões (não apenas 2)
-      // quando selectOffDays seleciona dias consecutivos bloqueados. Issue #86.
-      // DIURNO não precisa: limite semanal é sempre 36h e correctHours já cobre o déficit.
-      if (isNoturno) {
+      // Aplicado a todos os não-ADM: garante que semanas 42h recebam 3 plantões (não apenas 2)
+      // quando selectOffDays seleciona dias consecutivos bloqueados. Issue #86 (NOTURNO), #90 (DIURNO).
+      // NOTURNO e DIURNO têm o mesmo problema: turno termina às 07:00/19:00 e o próximo começa
+      // 12h depois — rest < 24h mínimo → bloqueado. Recovery busca dia de selectedOff com rest ≥ 24h.
+      if (!isAdm) {
         const placedThisWeek = entries.filter(
           (e) => !e.is_day_off && e.shift_type_id && e.date >= week[0] && e.date <= week[week.length - 1]
         ).length;
@@ -461,7 +458,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
           for (const date of selectedOff) {
             if (recovered >= needed) break;
             if (lockedDates.has(date) || vacationDatesForEmp.has(date)) continue;
-            const shift = selectShift(twelveHourShifts, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+            const shift = selectShift(shiftsForSelect, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
             if (!shift) continue;
             entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
             totalHours += shift.duration_hours;
@@ -491,8 +488,8 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         lastShiftName = null;
       }
 
-      // Issue #65: Motorista NOTURNO em semana de 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
-      if (isNoturno && getWeekTypeFromPhase(effectiveCycleMonth, wi) === '42h') {
+      // Issues #65/#90: Motorista não-ADM (NOTURNO ou DIURNO) em semana 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
+      if (!isAdm && getWeekTypeFromPhase(effectiveCycleMonth, wi) === '42h') {
         const extraCandidates = [manhaShift, tardeShift].filter(Boolean);
         let extraAdded = false;
 
