@@ -202,6 +202,47 @@ describe('Regra #65 — turno extra de 6h respeita descanso mínimo de 24h (ou e
   });
 });
 
+// ── Teste 5: Bug #86 — semanas 42h devem ter 3 NOTURNOs (não apenas 2) ────────
+//
+// Cenário do bug: selectOffDays com offset=1 seleciona {Feb3,Feb4,Feb5} como work.
+// Feb4 (12h rest de Feb3) é bloqueado → apenas 2 NOTURNOs colocados = 24h na semana.
+// Com o fix (recovery step NOTURNO), o gerador recupera um dia de selectedOff
+// (Feb7) que tem ≥24h rest → 3 NOTURNOs = 36h + 1 extra 6h = 42h.
+
+describe('Bug #86 — recovery NOTURNO: 3 plantões em semanas 42h com dias consecutivos', () => {
+  it('FEV_WEEK1 (42h): motorista NOTURNO tem exatamente 3 plantões NOTURNO (não apenas 2)', async () => {
+    // empId=1 → workStart=1%7=1 → workIndices={Feb3,Feb4,Feb5} (consecutivos).
+    // Feb4 é bloqueado por descanso 12h de Feb3. Sem recovery → 2 NOTURNOs.
+    // Com recovery → Feb7 adicionado de selectedOff → 3 NOTURNOs.
+    const { emp } = await createNoturnoEmployee('Noturno Bug86');
+
+    const genRes = await request(app).post('/api/schedules/generate').send(FEV);
+    expect(genRes.status).toBe(200);
+
+    const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
+    const allEntries = schedRes.body.entries;
+
+    const week1Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK1);
+    const noturnoEntries = week1Work.filter((e) => e.shift_name === 'Noturno');
+
+    expect(noturnoEntries).toHaveLength(3);
+  });
+
+  it('FEV_WEEK2 (42h): motorista NOTURNO tem exatamente 3 plantões NOTURNO', async () => {
+    const { emp } = await createNoturnoEmployee('Noturno Bug86 W2');
+
+    await request(app).post('/api/schedules/generate').send(FEV);
+
+    const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
+    const allEntries = schedRes.body.entries;
+
+    const week2Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK2);
+    const noturnoEntries = week2Work.filter((e) => e.shift_name === 'Noturno');
+
+    expect(noturnoEntries).toHaveLength(3);
+  });
+});
+
 // ── Teste 4: Motorista DIURNO não recebe extra na semana 42h ─────────────────
 
 describe('Regra #65 — motorista DIURNO não recebe turno extra de 6h', () => {
