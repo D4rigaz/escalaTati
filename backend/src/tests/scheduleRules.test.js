@@ -193,4 +193,35 @@ describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
       expect(shiftById[e.shift_type_id]).toBe(e.shift_name);
     });
   });
+
+  it('Bug #87: motorista DIURNO (Ambulância) não recebe turno Noturno pelo enforceNocturnalCoverage', async () => {
+    // enforceNocturnalCoverage não verificava preferred_shift antes de converter.
+    // Um motorista DIURNO (Ambulância) poderia ser convertido para NOTURNO para cobrir
+    // requisito de cobertura noturna, gerando células adjacentes Diurno+Noturno na UI.
+    // Fix: guard `prefName && prefName !== SHIFT_NOTURNO_NAME` → skip DIURNO employees.
+    const db = freshDb();
+
+    const shiftsRes = await request(app).get('/api/shift-types');
+    const diurnoId = shiftsRes.body.find((s) => s.name === 'Diurno')?.id;
+    expect(diurnoId).toBeDefined();
+
+    // Cria 1 motorista DIURNO (Ambulância) — sem NOTURNO disponível para cobertura.
+    // enforceNocturnalCoverage tentará converter esse motorista antes do fix.
+    const empRes = await request(app).post('/api/employees').send({
+      name: 'Diurno Ambul Bug87',
+      setores: ['Transporte Ambulância'],
+      restRules: { preferred_shift_id: diurnoId, notes: null },
+    });
+    expect(empRes.status).toBe(201);
+    const empId = empRes.body.id;
+
+    await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
+
+    const schedRes = await request(app).get('/api/schedules?month=1&year=2025');
+    const empEntries = schedRes.body.entries.filter((e) => e.employee_id === empId && !e.is_day_off);
+
+    // Nenhuma entrada de trabalho deve ter turno Noturno
+    const noturnoEntries = empEntries.filter((e) => e.shift_name === 'Noturno');
+    expect(noturnoEntries).toHaveLength(0);
+  });
 });
