@@ -415,8 +415,14 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       const selectedOff = selectOffDays(freeInWeek, actualOffInWeek, employee.id);
       const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
 
+      // Bug #87: para motoristas com turno preferido EXPLICITAMENTE configurado como não-NOTURNO
+      // (ex: DIURNO), não fazer fallback para NOTURNO quando o turno preferido é bloqueado.
+      // DIURNO bloqueado → folga, não NOTURNO. Evita células DIURNO+NOTURNO adjacentes na UI.
+      // NOTURNO, sem-preferência (preferred_shift_id=null) e padrão: usam todos os 12h.
+      const shiftsForSelect = (rules.preferred_shift_id && !isNoturno) ? [preferredShift] : twelveHourShifts;
+
       for (const date of selectedWork) {
-        const shift = selectShift(twelveHourShifts, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+        const shift = selectShift(shiftsForSelect, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
         if (shift) {
           entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
           totalHours += shift.duration_hours;
@@ -863,6 +869,21 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
   // Agrupa datas em semanas (Dom–Sáb) para verificação do limite semanal CLT
   const weeks = buildWeeks(dates);
 
+  // Cache do turno preferido por employee_id — usado para não forçar NOTURNO em motoristas DIURNO.
+  // Bug #87: enforceNocturnalCoverage não verificava preferred_shift antes de converter.
+  const preferredShiftNameByEmp = {};
+  for (const emp of employees) {
+    const row = db
+      .prepare(
+        `SELECT st.name as shift_name
+         FROM employee_rest_rules err
+         LEFT JOIN shift_types st ON err.preferred_shift_id = st.id
+         WHERE err.employee_id = ?`
+      )
+      .get(emp.id);
+    preferredShiftNameByEmp[emp.id] = row?.shift_name ?? null;
+  }
+
   /**
    * Retorna os limites da semana à qual `date` pertence.
    */
@@ -935,6 +956,10 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
         if (fixed >= needed) break;
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_AMBUL)) continue;
+        // Bug #87: só converte motoristas cujo turno preferido é NOTURNO (ou sem preferência).
+        // Motoristas DIURNO não devem ser forçados a NOTURNO — viola o turno contratado.
+        const prefName = preferredShiftNameByEmp[emp.id];
+        if (prefName && prefName !== SHIFT_NOTURNO_NAME) continue;
         // Regra 12: seg_sex nunca trabalha Sábado (dow=6); domingo já tem required=0 acima.
         if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
         const entry = entryByEmp[emp.id];
