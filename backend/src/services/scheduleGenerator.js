@@ -402,116 +402,173 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         lastShiftName = null;
       }
 
-      // Garante mínimo 1 folga/semana quando não há férias ou forced-off (Regra: máx 6 dias consecutivos)
-      const existingOffInWeek = vacInWeek.length + forcedOff.length;
-      const minOffNeeded = freeInWeek.length > 0 ? Math.max(0, 1 - existingOffInWeek) : 0;
-      const actualWorkInWeek = Math.min(freeInWeek.length - minOffNeeded, 3);
-      const actualOffInWeek = freeInWeek.length - actualWorkInWeek;
+      // Issue #90 — DIURNO em semana 42h: nova abordagem aprovada pelo PO.
+      // Seleciona 4 posições com espaçamento de 2 dias (índices 0,2,4,6 em available),
+      // garantindo rest ≥ 36h entre qualquer par DIURNO(19:00)→DIURNO(07:00) do próximo dia.
+      // Rotaciona qual posição recebe o turno extra de 6h via employee.id % 4.
+      const weekType = getWeekTypeFromPhase(effectiveCycleMonth, wi);
+      const isDiurno42h = !isNoturno && weekType === '42h';
 
-      const selectedOff = selectOffDays(freeInWeek, actualOffInWeek, employee.id);
-      const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
+      if (isDiurno42h) {
+        // Dias disponíveis da semana (não locked, não vacation)
+        const available = freeInWeek.filter(
+          (d) => !lockedDates.has(d) && !vacationDatesForEmp.has(d)
+        );
 
-      // Bug #87: para motoristas com turno preferido EXPLICITAMENTE configurado como não-NOTURNO
-      // (ex: DIURNO), não fazer fallback para NOTURNO quando o turno preferido é bloqueado.
-      // DIURNO bloqueado → folga, não NOTURNO. Evita células DIURNO+NOTURNO adjacentes na UI.
-      // NOTURNO, sem-preferência (preferred_shift_id=null) e padrão: usam todos os 12h.
-      const shiftsForSelect = (rules.preferred_shift_id && !isNoturno) ? [preferredShift] : twelveHourShifts;
+        // Posições 0, 2, 4, 6 — espaçamento de 2 dias
+        const activePositions = [0, 2, 4, 6].filter((i) => i < available.length);
 
-      for (const date of selectedWork) {
-        const shift = selectShift(shiftsForSelect, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
-        if (shift) {
-          entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
-          totalHours += shift.duration_hours;
+        if (activePositions.length > 0) {
+          // Qual posição recebe o turno extra de 6h (Manhã ou Tarde)
+          const extraPositionIndex = employee.id % activePositions.length;
 
-          const shiftStart = computeShiftStart(date, shift);
-          const restHours = lastShiftEnd
-            ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
-            : Infinity;
-
-          consecutiveHours = restHours === 0
-            ? consecutiveHours + shift.duration_hours
-            : shift.duration_hours;
-
-          lastShiftEnd = computeShiftEnd(date, shift);
-          lastShiftName = shift.name;
-        } else {
-          entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
-          consecutiveHours = 0;
-          lastShiftName = null;
+          for (let pi = 0; pi < activePositions.length; pi++) {
+            const date = available[activePositions[pi]];
+            if (pi === extraPositionIndex) {
+              // Turno extra de 6h
+              const extraShift = manhaShift || tardeShift;
+              if (extraShift) {
+                entries.push({ employee_id: employee.id, shift_type_id: extraShift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+                totalHours += extraShift.duration_hours;
+                lastShiftEnd = computeShiftEnd(date, extraShift);
+                lastShiftName = extraShift.name;
+                consecutiveHours = extraShift.duration_hours;
+              }
+            } else {
+              // Turno Diurno 12h
+              entries.push({ employee_id: employee.id, shift_type_id: preferredShift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+              totalHours += preferredShift.duration_hours;
+              lastShiftEnd = computeShiftEnd(date, preferredShift);
+              lastShiftName = preferredShift.name;
+              consecutiveHours = preferredShift.duration_hours;
+            }
+          }
         }
-      }
 
-      // Recuperação NOTURNO: se selectedWork bloqueou turnos por restrição de descanso (12h < 24h),
-      // tenta dias de selectedOff que tenham descanso adequado para completar a meta semanal.
-      // Aplicado a todos os não-ADM: garante que semanas 42h recebam 3 plantões (não apenas 2)
-      // quando selectOffDays seleciona dias consecutivos bloqueados. Issue #86 (NOTURNO), #90 (DIURNO).
-      // NOTURNO e DIURNO têm o mesmo problema: turno termina às 07:00/19:00 e o próximo começa
-      // 12h depois — rest < 24h mínimo → bloqueado. Recovery busca dia de selectedOff com rest ≥ 24h.
-      if (!isAdm) {
-        const placedThisWeek = entries.filter(
-          (e) => !e.is_day_off && e.shift_type_id && e.date >= week[0] && e.date <= week[week.length - 1]
-        ).length;
-        if (placedThisWeek < actualWorkInWeek) {
-          const needed = actualWorkInWeek - placedThisWeek;
-          let recovered = 0;
-          const convertedFromOff = new Set();
-          for (const date of selectedOff) {
-            if (recovered >= needed) break;
-            if (lockedDates.has(date) || vacationDatesForEmp.has(date)) continue;
-            const shift = selectShift(shiftsForSelect, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
-            if (!shift) continue;
+        // Dias restantes da semana = folga
+        const activeDates = new Set(activePositions.map((pi) => available[pi]));
+        for (const date of freeInWeek) {
+          if (!activeDates.has(date)) {
+            entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+            consecutiveHours = 0;
+            lastShiftName = null;
+          }
+        }
+      } else {
+        // Fluxo normal: NOTURNO, ADM, DIURNO 36h, etc.
+
+        // Garante mínimo 1 folga/semana quando não há férias ou forced-off (Regra: máx 6 dias consecutivos)
+        const existingOffInWeek = vacInWeek.length + forcedOff.length;
+        const minOffNeeded = freeInWeek.length > 0 ? Math.max(0, 1 - existingOffInWeek) : 0;
+        const actualWorkInWeek = Math.min(freeInWeek.length - minOffNeeded, 3);
+        const actualOffInWeek = freeInWeek.length - actualWorkInWeek;
+
+        const selectedOff = selectOffDays(freeInWeek, actualOffInWeek, employee.id);
+        const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
+
+        // Bug #87: para motoristas com turno preferido EXPLICITAMENTE configurado como não-NOTURNO
+        // (ex: DIURNO), não fazer fallback para NOTURNO quando o turno preferido é bloqueado.
+        // DIURNO bloqueado → folga, não NOTURNO. Evita células DIURNO+NOTURNO adjacentes na UI.
+        // NOTURNO, sem-preferência (preferred_shift_id=null) e padrão: usam todos os 12h.
+        const shiftsForSelect = (rules.preferred_shift_id && !isNoturno) ? [preferredShift] : twelveHourShifts;
+
+        for (const date of selectedWork) {
+          const shift = selectShift(shiftsForSelect, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+          if (shift) {
             entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
             totalHours += shift.duration_hours;
+
             const shiftStart = computeShiftStart(date, shift);
             const restHours = lastShiftEnd
               ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
               : Infinity;
+
             consecutiveHours = restHours === 0
               ? consecutiveHours + shift.duration_hours
               : shift.duration_hours;
+
             lastShiftEnd = computeShiftEnd(date, shift);
             lastShiftName = shift.name;
-            convertedFromOff.add(date);
-            recovered++;
-          }
-          // Remove dias convertidos de selectedOff para não serem adicionados como folga abaixo
-          for (const date of convertedFromOff) {
-            const idx = selectedOff.indexOf(date);
-            if (idx !== -1) selectedOff.splice(idx, 1);
+          } else {
+            entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+            consecutiveHours = 0;
+            lastShiftName = null;
           }
         }
-      }
 
-      for (const date of selectedOff) {
-        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
-        consecutiveHours = 0;
-        lastShiftName = null;
-      }
+        // Recuperação NOTURNO: se selectedWork bloqueou turnos por restrição de descanso (12h < 24h),
+        // tenta dias de selectedOff que tenham descanso adequado para completar a meta semanal.
+        // Aplicado a todos os não-ADM: garante que semanas 42h recebam 3 plantões (não apenas 2)
+        // quando selectOffDays seleciona dias consecutivos bloqueados. Issue #86 (NOTURNO), #90 (DIURNO).
+        // NOTURNO e DIURNO têm o mesmo problema: turno termina às 07:00/19:00 e o próximo começa
+        // 12h depois — rest < 24h mínimo → bloqueado. Recovery busca dia de selectedOff com rest ≥ 24h.
+        if (!isAdm) {
+          const placedThisWeek = entries.filter(
+            (e) => !e.is_day_off && e.shift_type_id && e.date >= week[0] && e.date <= week[week.length - 1]
+          ).length;
+          if (placedThisWeek < actualWorkInWeek) {
+            const needed = actualWorkInWeek - placedThisWeek;
+            let recovered = 0;
+            const convertedFromOff = new Set();
+            for (const date of selectedOff) {
+              if (recovered >= needed) break;
+              if (lockedDates.has(date) || vacationDatesForEmp.has(date)) continue;
+              const shift = selectShift(shiftsForSelect, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+              if (!shift) continue;
+              entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+              totalHours += shift.duration_hours;
+              const shiftStart = computeShiftStart(date, shift);
+              const restHours = lastShiftEnd
+                ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
+                : Infinity;
+              consecutiveHours = restHours === 0
+                ? consecutiveHours + shift.duration_hours
+                : shift.duration_hours;
+              lastShiftEnd = computeShiftEnd(date, shift);
+              lastShiftName = shift.name;
+              convertedFromOff.add(date);
+              recovered++;
+            }
+            // Remove dias convertidos de selectedOff para não serem adicionados como folga abaixo
+            for (const date of convertedFromOff) {
+              const idx = selectedOff.indexOf(date);
+              if (idx !== -1) selectedOff.splice(idx, 1);
+            }
+          }
+        }
 
-      // Issues #65/#90: Motorista não-ADM (NOTURNO ou DIURNO) em semana 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
-      if (!isAdm && getWeekTypeFromPhase(effectiveCycleMonth, wi) === '42h') {
-        const extraCandidates = [manhaShift, tardeShift].filter(Boolean);
-        let extraAdded = false;
+        for (const date of selectedOff) {
+          entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+          consecutiveHours = 0;
+          lastShiftName = null;
+        }
 
-        for (const offDate of selectedOff) {
-          if (extraAdded) break;
-          if (lockedDates.has(offDate) || vacationDatesForEmp.has(offDate)) continue;
+        // Issue #65: NOTURNO em semana 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
+        // DIURNO 42h usa caminho separado acima (isDiurno42h).
+        if (isNoturno && weekType === '42h') {
+          const extraCandidates = [manhaShift, tardeShift].filter(Boolean);
+          let extraAdded = false;
 
-          for (const extraShift of extraCandidates) {
-            if (!canAddExtraShiftInMemory(entries, offDate, extraShift, shiftMap)) continue;
+          for (const offDate of selectedOff) {
+            if (extraAdded) break;
+            if (lockedDates.has(offDate) || vacationDatesForEmp.has(offDate)) continue;
 
-            // Modifica a entrada de folga existente para turno de trabalho
-            const offEntry = entries.find(
-              (e) => e.date === offDate && e.is_day_off === 1 && !e.is_locked
-            );
-            if (!offEntry) continue;
+            for (const extraShift of extraCandidates) {
+              if (!canAddExtraShiftInMemory(entries, offDate, extraShift, shiftMap)) continue;
 
-            offEntry.is_day_off = 0;
-            offEntry.shift_type_id = extraShift.id;
-            offEntry.notes = null;
-            totalHours += extraShift.duration_hours;
-            extraAdded = true;
-            break;
+              // Modifica a entrada de folga existente para turno de trabalho
+              const offEntry = entries.find(
+                (e) => e.date === offDate && e.is_day_off === 1 && !e.is_locked
+              );
+              if (!offEntry) continue;
+
+              offEntry.is_day_off = 0;
+              offEntry.shift_type_id = extraShift.id;
+              offEntry.notes = null;
+              totalHours += extraShift.duration_hours;
+              extraAdded = true;
+              break;
+            }
           }
         }
       }
