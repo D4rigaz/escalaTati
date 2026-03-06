@@ -8,22 +8,23 @@ beforeEach(() => freshDb());
 // ─── Regra 1: Padrão de 12 horas ────────────────────────────────────────────
 
 describe('Regra 1 — padrão de 12h', () => {
-  it('prefere turnos de 12h (Noturno) sobre turnos de 6h', async () => {
+  it('prefere turnos de 12h (Diurno/Noturno) sobre turnos de 6h', async () => {
     const db = freshDb();
     createEmployee(db, { name: 'Ana' });
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
     const schedule = await request(app).get('/api/schedules?month=1&year=2025');
-    const workEntries = schedule.body.entries.filter(
-      (e) => !e.is_day_off && e.shift_name === 'Noturno'
+    // Conta todos os turnos de 12h (Diurno ou Noturno — o fallback é Diurno quando preferred_shift_id é null)
+    const twelveHourEntries = schedule.body.entries.filter(
+      (e) => !e.is_day_off && e.duration_hours === 12
     );
     const sixHourEntries = schedule.body.entries.filter(
       (e) => !e.is_day_off && e.duration_hours === 6
     );
 
     // Deve ter mais turnos de 12h do que de 6h
-    expect(workEntries.length).toBeGreaterThan(sixHourEntries.length);
+    expect(twelveHourEntries.length).toBeGreaterThan(sixHourEntries.length);
   });
 });
 
