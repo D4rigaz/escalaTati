@@ -513,13 +513,54 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
             for (const date of selectedOff) {
               if (recovered >= needed) break;
               if (lockedDates.has(date) || vacationDatesForEmp.has(date)) continue;
-              const shift = selectShift(shiftsForSelect, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+
+              // Fix #94: quando o lastShiftEnd global está no futuro em relação ao candidato
+              // (caso cross-semana: isDiurno42h colocou turno no fim da semana anterior,
+              // fazendo lastShiftEnd apontar para além do candidato de selectedOff),
+              // usa virtual lastShiftEnd = último turno cronologicamente ANTES deste candidato.
+              // Guarda crítica: se não houver preceding (candidato vem antes de todo trabalho
+              // já feito, i.e., data retroativa), manter lastShiftEnd global — o rest negativo
+              // fará o selectShift rejeitar corretamente, evitando colocação retroativa.
+              let effectiveLastShiftEnd = lastShiftEnd;
+              let effectiveLastShiftName = lastShiftName;
+              let effectiveConsecutiveHours = consecutiveHours;
+
+              if (lastShiftEnd) {
+                const candidateShiftForCheck = shiftsForSelect[0] || preferredShift;
+                if (candidateShiftForCheck) {
+                  const candidateStart = computeShiftStart(date, candidateShiftForCheck);
+                  if (candidateStart && lastShiftEnd > candidateStart) {
+                    // O lastShiftEnd global está além do candidateStart: cross-semana isDiurno42h.
+                    // Calcular virtual rest a partir do último turno ANTERIOR a este candidato.
+                    const precedingWork = entries
+                      .filter(e => !e.is_day_off && e.shift_type_id && e.date < date)
+                      .sort((a, b) => (a.date > b.date ? 1 : -1));
+                    const preceding = precedingWork.length ? precedingWork[precedingWork.length - 1] : null;
+                    if (preceding) {
+                      // preceding existe: usar virtual rest (o caso correto do fix #94)
+                      effectiveLastShiftEnd = computeShiftEnd(preceding.date, shiftMap[preceding.shift_type_id]);
+                      effectiveLastShiftName = shiftMap[preceding.shift_type_id]?.name ?? null;
+                      effectiveConsecutiveHours = shiftMap[preceding.shift_type_id]?.duration_hours ?? 0;
+                    }
+                    // Se preceding === null: manter effectiveLastShiftEnd = lastShiftEnd global.
+                    // selectShift verá rest < 0 e rejeitará → candidato retroativo pulado corretamente.
+                  }
+                }
+              }
+
+              const shift = selectShift(shiftsForSelect, preferredShift, effectiveLastShiftEnd, effectiveLastShiftName, effectiveConsecutiveHours, date);
               if (!shift) continue;
+              // Verificar restrição de descanso PARA FRENTE (turno seguinte já colocado).
+              // Necessário quando o virtual rest colocou este candidato em data anterior
+              // a turnos já existentes no array entries — hasAdequateRest verifica ambos lados.
+              const tempEntry = { date, is_day_off: 0, shift_type_id: shift.id, is_locked: 0 };
+              if (!hasAdequateRest(entries, tempEntry, shift, shiftMap)) continue;
+              if (wouldExceedConsecutive(entries, tempEntry)) continue;
               entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
               totalHours += shift.duration_hours;
               const shiftStart = computeShiftStart(date, shift);
-              const restHours = lastShiftEnd
-                ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
+              const restHours = effectiveLastShiftEnd
+                ? (shiftStart - effectiveLastShiftEnd) / (1000 * 60 * 60)
                 : Infinity;
               consecutiveHours = restHours === 0
                 ? consecutiveHours + shift.duration_hours
