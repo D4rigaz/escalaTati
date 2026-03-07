@@ -1502,16 +1502,34 @@ export function correctHours(
   const offEntries  = entries.filter((e) => e.is_day_off);
 
   if (diff > 6) {
-    // Too many hours: convert work days to off days until within tolerance
+    // Too many hours: convert work days to off days until within tolerance.
+    // Guard CLT: nunca remover entrada de semana que já está no/abaixo do limite CLT semanal.
+    // Apenas remover de semanas com excesso. Se nenhuma semana tiver excesso, aceitar total > 160h
+    // (o modelo CLT é média de 3 meses, não 160h/mês fixo).
     let excess = diff;
     for (const entry of workEntries) {
       if (excess <= 6) break;
       const shift = shiftMap[entry.shift_type_id];
-      if (shift) {
-        entry.shift_type_id = null;
-        entry.is_day_off = 1;
-        excess -= shift.duration_hours;
+      if (!shift) continue;
+
+      // Guard: verificar se a semana desta entrada ainda está acima do limite CLT.
+      if (weeks.length > 0 && effectiveCycleMonth !== null) {
+        const wm = weekMetaFor(entry.date);
+        if (wm) {
+          const { cltLimit } = wm;
+          if (cltLimit.type === 'shifts') {
+            const weekShifts = inMemoryWeeklyShiftCount(wm.weekStart, wm.weekEnd);
+            if (weekShifts <= cltLimit.limit) continue; // semana já no/abaixo do limite CLT
+          } else {
+            const weekHours = inMemoryWeeklyHours(wm.weekStart, wm.weekEnd);
+            if (weekHours <= cltLimit.limit) continue; // semana já no/abaixo do limite CLT
+          }
+        }
       }
+
+      entry.shift_type_id = null;
+      entry.is_day_off = 1;
+      excess -= shift.duration_hours;
     }
   } else if (diff < -6) {
     // Too few hours: convert off days to the sector's preferred shift
