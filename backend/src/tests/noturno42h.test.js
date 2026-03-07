@@ -95,7 +95,7 @@ async function createDiurnoEmployee(name, cycleStartMonth = 2, cycleStartYear = 
 // ── Teste 1: Semana 36h — sem turno extra de 6h ───────────────────────────────
 
 describe('Regra #65 — semana 36h: NOTURNO sem turno extra', () => {
-  it('motorista NOTURNO em semana 36h (FEV_WEEK3 e FEV_WEEK4) não recebe turno extra de 6h', async () => {
+  it('motorista NOTURNO em semana 36h (FEV_WEEK1 e FEV_WEEK4) não recebe turno extra de 6h', async () => {
     const { emp } = await createNoturnoEmployee('Noturno 36h');
 
     const genRes = await request(app).post('/api/schedules/generate').send(FEV);
@@ -105,14 +105,14 @@ describe('Regra #65 — semana 36h: NOTURNO sem turno extra', () => {
     const allEntries = schedRes.body.entries;
 
     // Semanas 36h: nenhum turno de 6h
-    const week3Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK3);
+    const week1Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK1); // fix #96: cltWi=0 -> 36h
     const week4Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK4);
 
-    const sixHourIn36 = [...week3Work, ...week4Work].filter((e) => e.duration_hours === 6);
+    const sixHourIn36 = [...week1Work, ...week4Work].filter((e) => e.duration_hours === 6);
     expect(sixHourIn36).toHaveLength(0);
 
     // Todos os turnos de trabalho nas semanas 36h são de 12h (NOTURNO)
-    const allWork36 = [...week3Work, ...week4Work];
+    const allWork36 = [...week1Work, ...week4Work];
     allWork36.forEach((e) => {
       expect(e.duration_hours).toBe(12);
     });
@@ -122,7 +122,7 @@ describe('Regra #65 — semana 36h: NOTURNO sem turno extra', () => {
 // ── Teste 2: Semana 42h — 1 turno extra de 6h ────────────────────────────────
 
 describe('Regra #65 — semana 42h: NOTURNO com 1 turno extra de 6h', () => {
-  it('motorista NOTURNO em semana 42h (FEV_WEEK1) tem exatamente 1 turno de 6h (Manhã ou Tarde)', async () => {
+  it('motorista NOTURNO em semana 42h (FEV_WEEK2) tem exatamente 1 turno de 6h (Manhã ou Tarde)', async () => {
     const { emp } = await createNoturnoEmployee('Noturno 42h');
 
     const genRes = await request(app).post('/api/schedules/generate').send(FEV);
@@ -131,8 +131,8 @@ describe('Regra #65 — semana 42h: NOTURNO com 1 turno extra de 6h', () => {
     const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
     const allEntries = schedRes.body.entries;
 
-    const week1Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK1);
-    const sixHourEntries = week1Work.filter((e) => e.duration_hours === 6);
+    const week2Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK2); // fix #96: cltWi=1 -> 42h
+    const sixHourEntries = week2Work.filter((e) => e.duration_hours === 6);
 
     // Exatamente 1 turno de 6h na semana 42h
     expect(sixHourEntries).toHaveLength(1);
@@ -174,7 +174,7 @@ describe('Regra #65 — turno extra de 6h respeita descanso mínimo de 24h (ou e
 
     // Encontra o turno extra de 6h em FEV_WEEK1
     const extraEntry = allEntries.find(
-      (e) => e.employee_id === emp.id && FEV_WEEK1.includes(e.date) && e.duration_hours === 6
+      (e) => e.employee_id === emp.id && FEV_WEEK2.includes(e.date) && e.duration_hours === 6 // fix #96: FEV_WEEK2 cltWi=1 -> 42h
     );
     expect(extraEntry).toBeDefined();
 
@@ -249,7 +249,7 @@ describe('Bug #86 — recovery NOTURNO: 3 plantões em semanas 42h com dias cons
 // aplica-se a NOTURNO e DIURNO. Anterior: exclusivo do NOTURNO (#65).
 
 describe('Regra #90 — motorista DIURNO recebe turno extra de 6h em semana 42h', () => {
-  it('motorista DIURNO em semana 42h (FEV_WEEK1) tem exatamente 1 turno de 6h (Manhã ou Tarde)', async () => {
+  it('motorista DIURNO em semana 42h (FEV_WEEK2) tem exatamente 1 turno de 6h // fix #96 (Manhã ou Tarde)', async () => {
     const { emp } = await createDiurnoEmployee('Diurno 42h');
 
     const genRes = await request(app).post('/api/schedules/generate').send(FEV);
@@ -258,8 +258,8 @@ describe('Regra #90 — motorista DIURNO recebe turno extra de 6h em semana 42h'
     const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
     const allEntries = schedRes.body.entries;
 
-    const week1Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK1);
-    const sixHourEntries = week1Work.filter((e) => e.duration_hours === 6);
+    const week2Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK2); // fix #96
+    const sixHourEntries = week2Work.filter((e) => e.duration_hours === 6);
 
     // Exatamente 1 turno de 6h na semana 42h
     expect(sixHourEntries).toHaveLength(1);
@@ -283,7 +283,7 @@ describe('Regra #90 — motorista DIURNO recebe turno extra de 6h em semana 42h'
     expect(['Manhã', 'Tarde']).toContain(sixHourEntries[0].shift_name);
   });
 
-  it('motorista DIURNO em semana 36h (FEV_WEEK3 e FEV_WEEK4) não tem turno extra de 6h', async () => {
+  it('motorista DIURNO em semana 36h (FEV_WEEK1 e FEV_WEEK4) // fix #96 não tem turno extra de 6h', async () => {
     const { emp } = await createDiurnoEmployee('Diurno 36h');
 
     await request(app).post('/api/schedules/generate').send(FEV);
@@ -291,10 +291,10 @@ describe('Regra #90 — motorista DIURNO recebe turno extra de 6h em semana 42h'
     const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
     const allEntries = schedRes.body.entries;
 
-    const week3Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK3);
+    const week1Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK1); // fix #96: cltWi=0 -> 36h
     const week4Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK4);
 
-    const sixHourIn36 = [...week3Work, ...week4Work].filter((e) => e.duration_hours === 6);
+    const sixHourIn36 = [...week1Work, ...week4Work].filter((e) => e.duration_hours === 6);
     expect(sixHourIn36).toHaveLength(0);
   });
 });
