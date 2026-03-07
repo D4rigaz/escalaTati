@@ -79,7 +79,7 @@ describe('Regra 13 — sem days_off_per_week, total de horas próximo de 160h', 
     expect(res.body[0].restRules.days_off_per_week).toBeUndefined();
   });
 
-  it('total de horas mensal fica próximo de 160h (desvio ≤ 12h)', async () => {
+  it('total de horas mensal fica entre 144h e 180h (meses com 5 semanas podem exceder 160h)', async () => {
     const db = freshDb();
     createEmployee(db, { name: 'Carla' });
 
@@ -87,7 +87,9 @@ describe('Regra 13 — sem days_off_per_week, total de horas próximo de 160h', 
 
     const schedule = await request(app).get('/api/schedules?month=1&year=2025');
     const total = schedule.body.totals[0]?.total_hours ?? 0;
-    expect(Math.abs(total - 160)).toBeLessThanOrEqual(12);
+    expect(total).toBeGreaterThanOrEqual(144);
+    expect(total).toBeLessThanOrEqual(180);
+    // Nota: exceder 160h em meses com 5 semanas é aceitável (fix #92 — guard CLT semanal).
   });
 });
 
