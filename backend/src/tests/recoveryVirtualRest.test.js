@@ -14,22 +14,23 @@
  * mantém o lastShiftEnd global (rest negativo → rejeição correta).
  * hasAdequateRest verifica restrições para frente (turno seguinte).
  *
- * Cenário de teste:
+ * Cenário de teste (atualizado pós fix #98):
  *   Motorista DIURNO, Transporte Ambulância (preferred_shift_id = null, não-ADM).
- *   cycle_start=Jan/2025 → fase 1 → padrão ['36h','42h','42h','36h','36h'] em Jan/2025.
- *   Jan/2025 (5 semanas):
- *     Week 0: 36h (4 dias: Jan 1–4)
- *     Week 1: 42h → isDiurno42h (Jan 5–11)
- *     Week 2: 42h → isDiurno42h (Jan 12–18) — último turno = Sáb Jan 18
- *     Week 3: 36h → else-branch (Jan 19–25) — Jan 19 Dom pode ser bloqueado (12h rest)
- *     Week 4: 36h → else-branch (Jan 26–31)
+ *   cycle_start=Jan/2025 → fase 1 → padrão ['36h','42h','42h','36h'] em Jan/2025.
+ *   Jan/2025 (5 semanas, cltWeekOffset=1 por semana parcial Jan 1–4):
+ *     Week 0 (parcial Jan 1–4):  cltWi=-1 → isDiurnoPartialWeek → posições pares
+ *     Week 1 (Jan 5–11):         cltWi=0  → 36h → else-branch
+ *     Week 2 (Jan 12–18):        cltWi=1  → 42h → isDiurno42h — último turno = Sáb Jan 18
+ *     Week 3 (Jan 19–25):        cltWi=2  → 42h → isDiurno42h — fix #98B: Dom bloqueado (12h rest)
+ *     Week 4 (Jan 26–31, parcial): cltWi=3 → 36h → else-branch — recovery #94 aplica aqui
  *
- * Antes do fix: Week 3 gerava somente 2×12h = 24h (recovery falhava).
- * Depois do fix: Week 3 gera 3×12h = 36h (recovery usa virtual rest).
+ * Pós fix #98B: Week 3 é isDiurno42h e Dom Jan 19 é bloqueado (12h rest de Sáb Jan 18).
+ * Week 3 gera ≥ 24h (2–3 turnos dependendo do extraPositionIndex).
+ * Week 4 (36h else-branch) usa recovery #94 para compensar e atingir 3 turnos = 36h.
  *
  * Verificações:
  *   1. Total de horas mensal entre 144h e 192h.
- *   2. Week 3 (Jan 19–25) com pelo menos 36h (3 turnos de 12h).
+ *   2. Week 4 (Jan 26–31) com pelo menos 36h (3 turnos de 12h) — valida recovery #94.
  *   3. Nenhum par consecutivo de turnos totaliza >= 24h (Regra 2).
  */
 
@@ -78,19 +79,21 @@ describe('Fix #94 — recovery virtual rest cross-semana', () => {
     expect(totalHours).toBeGreaterThanOrEqual(144);
     expect(totalHours).toBeLessThanOrEqual(192);
 
-    // ── Verificação 2: Week 3 (Jan 19–25) tem pelo menos 36h ────────────────
-    // Phase 1, Week 3 = 36h → expected 3 turnos de 12h = 36h.
-    // Antes do fix, a semana gerava 24h (2 turnos) por causa do bug no recovery.
-    const week3Entries = allEntries.filter(
-      (e) => e.date >= '2025-01-19' && e.date <= '2025-01-25'
+    // ── Verificação 2: Week 4 (Jan 26–31) tem pelo menos 36h ────────────────
+    // Pós fix #98B: Week 3 (Jan 19–25) é isDiurno42h com Dom bloqueado — gera ≥ 24h.
+    // Week 4 (Jan 26–31) é 36h else-branch onde recovery #94 aplica:
+    // recovery usa virtual lastShiftEnd para contornar candidatos bloqueados.
+    const week4Entries = allEntries.filter(
+      (e) => e.date >= '2025-01-26' && e.date <= '2025-01-31'
     );
-    const week3Hours = week3Entries.reduce(
+    const week4Hours = week4Entries.reduce(
       (sum, e) => (e.is_day_off ? sum : sum + (e.duration_hours || 0)),
       0
     );
-    expect(week3Hours).toBeGreaterThanOrEqual(36);
+    expect(week4Hours).toBeGreaterThanOrEqual(36);
 
     // ── Verificação 3: Regra 2 — nenhum par consecutivo totaliza >= 24h ─────
+    // fix #98B garante que Dom Jan 19 não receba turno com rest=12h de Sáb Jan 18.
     const workEntries = allEntries
       .filter((e) => !e.is_day_off && e.start_time && e.duration_hours)
       .sort((a, b) => a.date.localeCompare(b.date));
