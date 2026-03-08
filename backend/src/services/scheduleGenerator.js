@@ -270,6 +270,13 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     employee.cycle_start_year ?? new Date().getFullYear(),
     genMonth, genYear
   );
+  // Issue #96: Detectar semanas parciais (< 7 dias) no início e fim do mês.
+  // Meses que não começam num domingo têm uma semana inicial parcial.
+  // O índice CLT (wi) deve contar apenas a partir da primeira semana COMPLETA.
+  // Semanas parciais não recebem meta CLT — escalamos o que couber com rest ≥ 24h.
+  const firstWeekIsPartial = weeks.length > 0 && weeks[0].length < 7;
+  // cltWeekOffset: quantas semanas parciais há antes das semanas completas (0 ou 1)
+  const cltWeekOffset = firstWeekIsPartial ? 1 : 0;
 
   let totalHours = 0;
   let lastShiftEnd = null;
@@ -328,7 +335,13 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         lastShiftName = null;
       }
 
-      const maxTurnosNaSemana = getWeekTypeFromPhase(effectiveCycleMonth, wi) === '36h' ? 3 : 4;
+      // Issue #96: wi CLT começa em 0 na primeira semana COMPLETA.
+      // Se a semana atual é parcial (cltWi < 0), escalar sem meta CLT (usa máx 3 turnos conservador).
+      const cltWi = wi - cltWeekOffset;
+      const weekTypeAdm = cltWi >= 0
+        ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi)
+        : '36h'; // semana parcial: sem meta CLT — usa 3 turnos como padrão conservador
+      const maxTurnosNaSemana = weekTypeAdm === '36h' ? 3 : 4;
       const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
       const actualOffInWeek = freeInWeek.length - Math.max(0, maxWorkInWeek);
 
@@ -406,7 +419,12 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       // Seleciona 4 posições com espaçamento de 2 dias (índices 0,2,4,6 em available),
       // garantindo rest ≥ 36h entre qualquer par DIURNO(19:00)→DIURNO(07:00) do próximo dia.
       // Rotaciona qual posição recebe o turno extra de 6h via employee.id % 4.
-      const weekType = getWeekTypeFromPhase(effectiveCycleMonth, wi);
+      // Issue #96: wi CLT começa em 0 na primeira semana COMPLETA.
+      // Semanas parciais (cltWi < 0) → '36h' como fallback (3 plantões, sem extra 6h).
+      const cltWi = wi - cltWeekOffset;
+      const weekType = cltWi >= 0
+        ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi)
+        : '36h'; // semana parcial: sem meta CLT — sem turno extra 6h
       const isDiurno42h = !isNoturno && weekType === '42h';
 
       if (isDiurno42h) {
@@ -644,10 +662,15 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     });
   }
 
-  const weekClassifications = weeks.map((_, wi) => ({
-    weekIndex: wi,
-    type: getWeekTypeFromPhase(effectiveCycleMonth, wi),
-  }));
+  // Issue #96: semanas parciais recebem label 'partial', semanas CLT usam cltWi.
+  const weekClassifications = weeks.map((week, wi) => {
+    const cltWi = wi - cltWeekOffset;
+    return {
+      weekIndex: wi,
+      type: cltWi >= 0 ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi) : 'partial',
+      partial: week.length < 7,
+    };
+  });
 
   return { employee: employee.name, hours: finalHours, weekClassifications };
 }
@@ -1491,15 +1514,21 @@ export function correctHours(
 
   // Monta mapa semana → {weekStart, weekEnd, weekIndex, weekType, cltLimit}
   // para verificação do limite CLT por semana em conversões de folga→trabalho.
+  // Issue #96: semanas parciais (< 7 dias) usam '42h' como fallback conservador —
+  // não remover entries de semanas parciais que estão naturalmente abaixo do limite.
+  const firstWeekIsPartialCH = weeks.length > 0 && weeks[0].length < 7;
+  const cltWeekOffsetCH = firstWeekIsPartialCH ? 1 : 0;
   const weekMeta = weeks.map((week, wi) => {
-    const weekType = effectiveCycleMonth !== null
-      ? getWeekTypeFromPhase(effectiveCycleMonth, wi)
-      : '42h'; // fallback conservador sem contexto de fase
+    const cltWiCH = wi - cltWeekOffsetCH;
+    const weekType = (effectiveCycleMonth !== null && cltWiCH >= 0)
+      ? getWeekTypeFromPhase(effectiveCycleMonth, cltWiCH)
+      : '42h'; // fallback conservador: semanas parciais ou sem contexto de fase
     return {
       weekStart: week[0],
       weekEnd: week[week.length - 1],
       weekIndex: wi,
       weekType,
+      weekDays: week.length,
       cltLimit: getWeekLimitHours(isAdm, isNoturno, weekType),
     };
   });
