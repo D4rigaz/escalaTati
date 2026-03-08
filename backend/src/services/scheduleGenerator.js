@@ -436,12 +436,35 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         // Posições 0, 2, 4, 6 — espaçamento de 2 dias
         const activePositions = [0, 2, 4, 6].filter((i) => i < available.length);
 
+        // Fix #98B: activeDates construído incrementalmente — posições com rest < 24h
+        // (cross-week Sáb→Dom: lastShiftEnd da semana anterior pode violar MIN_REST_HOURS)
+        // são excluídas e caem no loop de folgas abaixo.
+        const activeDates = new Set();
+
         if (activePositions.length > 0) {
           // Qual posição recebe o turno extra de 6h (Manhã ou Tarde)
           const extraPositionIndex = employee.id % activePositions.length;
 
           for (let pi = 0; pi < activePositions.length; pi++) {
             const date = available[activePositions[pi]];
+
+            // Fix #98B: verifica rest cross-semana antes de colocar o turno.
+            // Sáb DIURNO (semana N) termina 19:00; Dom DIURNO (semana N+1) começa 07:00 = 12h < 24h.
+            // Se o descanso for insuficiente e não for emendado válido, pula esta posição (vira folga).
+            if (lastShiftEnd) {
+              const shiftRef = (pi === extraPositionIndex) ? (manhaShift || tardeShift) : preferredShift;
+              if (shiftRef) {
+                const dStart = computeShiftStart(date, shiftRef);
+                if (dStart) {
+                  const restHours = (dStart - lastShiftEnd) / (1000 * 60 * 60);
+                  if (restHours >= 0 && restHours < MIN_REST_HOURS) {
+                    if (!isValidEmendado(lastShiftName, shiftRef.name)) continue;
+                  }
+                }
+              }
+            }
+
+            activeDates.add(date);
             if (pi === extraPositionIndex) {
               // Turno extra de 6h
               const extraShift = manhaShift || tardeShift;
@@ -463,8 +486,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
           }
         }
 
-        // Dias restantes da semana = folga
-        const activeDates = new Set(activePositions.map((pi) => available[pi]));
+        // Dias restantes da semana = folga (inclui posições puladas pelo check de rest acima)
         for (const date of freeInWeek) {
           if (!activeDates.has(date)) {
             entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
@@ -474,6 +496,58 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         }
       } else {
         // Fluxo normal: NOTURNO, ADM, DIURNO 36h, etc.
+
+        // Fix #98A: DIURNO em semana parcial — aplica espaçamento de posições pares [0,2,...]
+        // para evitar turnos consecutivos com rest < 24h (ex: Qua→Qui em Abr/2026).
+        // Posições pares garantem pelo menos 1 dia de folga entre turnos DIURNO consecutivos.
+        const isDiurnoPartialWeek = !isNoturno && cltWi < 0;
+
+        if (isDiurnoPartialWeek) {
+          // Posições pares: [0, 2, 4, 6] filtradas por disponibilidade e rest adequado
+          const evenPositions = [0, 2, 4, 6].filter((i) => i < freeInWeek.length);
+          const diurnoPartialWorkDates = new Set();
+
+          for (const pi of evenPositions) {
+            const date = freeInWeek[pi];
+            // Check rest from lastShiftEnd (pode ser cross-semana ou início do mês)
+            if (lastShiftEnd && preferredShift) {
+              const dStart = computeShiftStart(date, preferredShift);
+              if (dStart) {
+                const restHours = (dStart - lastShiftEnd) / (1000 * 60 * 60);
+                if (restHours >= 0 && restHours < MIN_REST_HOURS) continue;
+              }
+            }
+            diurnoPartialWorkDates.add(date);
+          }
+
+          const shiftsForSelectPartial = (rules.preferred_shift_id && !isNoturno) ? [preferredShift] : twelveHourShifts;
+          for (const date of freeInWeek) {
+            if (diurnoPartialWorkDates.has(date)) {
+              const shift = selectShift(shiftsForSelectPartial, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+              if (shift) {
+                entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+                totalHours += shift.duration_hours;
+                const shiftStart = computeShiftStart(date, shift);
+                const restHours = lastShiftEnd
+                  ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
+                  : Infinity;
+                consecutiveHours = restHours === 0
+                  ? consecutiveHours + shift.duration_hours
+                  : shift.duration_hours;
+                lastShiftEnd = computeShiftEnd(date, shift);
+                lastShiftName = shift.name;
+              } else {
+                entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+                consecutiveHours = 0;
+                lastShiftName = null;
+              }
+            } else {
+              entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+              consecutiveHours = 0;
+              lastShiftName = null;
+            }
+          }
+        } else {
 
         // Garante mínimo 1 folga/semana quando não há férias ou forced-off (Regra: máx 6 dias consecutivos)
         const existingOffInWeek = vacInWeek.length + forcedOff.length;
@@ -602,6 +676,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
           lastShiftName = null;
         }
 
+
         // Issue #65: NOTURNO em semana 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
         // DIURNO 42h usa caminho separado acima (isDiurno42h).
         if (isNoturno && weekType === '42h') {
@@ -630,6 +705,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
             }
           }
         }
+        } // end else (isDiurnoPartialWeek)
       }
     }
   }
