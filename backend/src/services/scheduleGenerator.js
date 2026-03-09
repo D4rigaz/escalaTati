@@ -445,6 +445,10 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
           // Qual posição recebe o turno extra de 6h (Manhã ou Tarde)
           const extraPositionIndex = employee.id % activePositions.length;
 
+          // Fix #100: se qualquer posição for pulada por rest cross-week, as posições
+          // restantes devem receber 12h (não 6h), garantindo 36h uniformes.
+          let skippedAny = false;
+
           for (let pi = 0; pi < activePositions.length; pi++) {
             const date = available[activePositions[pi]];
 
@@ -452,20 +456,23 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
             // Sáb DIURNO (semana N) termina 19:00; Dom DIURNO (semana N+1) começa 07:00 = 12h < 24h.
             // Se o descanso for insuficiente e não for emendado válido, pula esta posição (vira folga).
             if (lastShiftEnd) {
-              const shiftRef = (pi === extraPositionIndex) ? (manhaShift || tardeShift) : preferredShift;
+              const shiftRef = (!skippedAny && pi === extraPositionIndex) ? (manhaShift || tardeShift) : preferredShift;
               if (shiftRef) {
                 const dStart = computeShiftStart(date, shiftRef);
                 if (dStart) {
                   const restHours = (dStart - lastShiftEnd) / (1000 * 60 * 60);
                   if (restHours >= 0 && restHours < MIN_REST_HOURS) {
-                    if (!isValidEmendado(lastShiftName, shiftRef.name)) continue;
+                    if (!isValidEmendado(lastShiftName, shiftRef.name)) {
+                      skippedAny = true;
+                      continue;
+                    }
                   }
                 }
               }
             }
 
             activeDates.add(date);
-            if (pi === extraPositionIndex) {
+            if (!skippedAny && pi === extraPositionIndex) {
               // Turno extra de 6h
               const extraShift = manhaShift || tardeShift;
               if (extraShift) {
