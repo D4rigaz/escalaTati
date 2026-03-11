@@ -1425,11 +1425,11 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       }
       if (assigned) continue;
 
-      // Passo 2: forçado — ignora restrições de descanso e consecutivos; respeita seg_sex, cap e limite CLT semanal
+      // Passo 2: forçado — ignora restrições de descanso, consecutivos e cap de horas; respeita seg_sex e limite CLT semanal
+      // Cap removido: permite motoristas acima de 160h como último recurso (fix #103, PO confirmado).
       let forced = false;
       for (const { folgaId, emp } of candidates) {
         if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         const shift = getShiftForEmp(emp);
         if (!withinWeeklyLimit(emp, date, shift)) continue;
         db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
@@ -1449,7 +1449,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       if (forced) continue;
 
       // Passo 3 (emergência): força candidato seg_sex em Sáb/Dom — equipe insuficiente de dom_sab
-      // Ainda respeita limite CLT semanal.
+      // Ainda respeita cap e limite CLT semanal (cap restaurado: evita seg_sex acima de 160h no Domingo).
       for (const { folgaId, emp } of candidates) {
         if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
         const shift = getShiftForEmp(emp);

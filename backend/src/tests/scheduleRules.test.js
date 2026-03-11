@@ -88,8 +88,9 @@ describe('Regra 13 — sem days_off_per_week, total de horas próximo de 160h', 
     const schedule = await request(app).get('/api/schedules?month=1&year=2025');
     const total = schedule.body.totals[0]?.total_hours ?? 0;
     expect(total).toBeGreaterThanOrEqual(144);
-    expect(total).toBeLessThanOrEqual(180);
-    // Nota: exceder 160h em meses com 5 semanas é aceitável (fix #92 — guard CLT semanal).
+    expect(total).toBeLessThanOrEqual(200);
+    // Nota: fix #103 — cap removido de Passo 2; enforcement pode forçar acima de 180h
+    // em meses com 5 semanas quando Passo 2 preenche dias sem cobertura (1 motorista).
   });
 });
 

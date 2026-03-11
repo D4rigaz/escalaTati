@@ -98,8 +98,9 @@ describe('Cenário A — Não-ADM: cycle_start não afeta plantões físicos', (
       );
 
       expect(finalHours).toBeGreaterThanOrEqual(144);
-      expect(finalHours).toBeLessThanOrEqual(180);
-      // Nota: exceder 160h em meses com 5 semanas é aceitável (fix #92 — guard CLT semanal).
+      expect(finalHours).toBeLessThanOrEqual(200);
+      // Nota: fix #103 — cap removido de Passo 2; enforcement pode forçar acima de 160h.
+      // Meses com 5 semanas podem exceder 180h quando Passo 2 preenche dias sem cobertura.
     });
   }
 });
@@ -150,10 +151,12 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
     expect(workIn(entries, empId, FEV_WEEK2)).toBe(3);
   });
 
-  it('ADM cycle_start=Jan/2025 (phase 2): semana 2 de Fev/2025 tem label 36h → exatamente 3 plantões; semana 1 (42h) tem mais plantões que semana 2 (36h)', async () => {
+  it('ADM cycle_start=Jan/2025 (phase 2): semana 3 de Fev/2025 tem label 36h (FEV_WEEK3, cltWi=2) → exatamente 3 plantões; semana 1 (42h) tem mais plantões que semana 3 (36h)', async () => {
     // cycle_start=Jan/2025 → phase 2 → patterns[2]=['42h','42h','36h','42h']
-    // sem 1=42h (4 turnos base), sem 2=36h (3 turnos). Total gerado=154h → enforcement
-    // adiciona 1 turno forçado na sem 1 (Feb 6, cap atingido) → sem 2 permanece em 3.
+    // FEV_WEEK1 (cltWi=0): '42h' → limite 4 turnos ADM
+    // FEV_WEEK2 (cltWi=1): '42h' → limite 4 turnos ADM  (NÃO é 36h — bug de documentação corrigido)
+    // FEV_WEEK3 (cltWi=2): '36h' → limite 3 turnos ADM ← esta é a semana de 36h
+    // fix #103: cap removido de Passo 2, mas withinWeeklyLimit ainda bloqueia FEV_WEEK3 em 3.
     const empRes = await request(app)
       .post('/api/employees')
       .send({ name: 'ADM Phase2', setores: ['Transporte Administrativo'], cycle_start_month: 1, cycle_start_year: 2025 });
@@ -166,13 +169,13 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
     const entries = schedRes.body.entries;
     const empId = empRes.body.id;
 
-    const week1Work = workIn(entries, empId, FEV_WEEK1); // 42h base (≥4 com enforcement)
-    const week2Work = workIn(entries, empId, FEV_WEEK2); // 36h → exatamente 3
+    const week1Work = workIn(entries, empId, FEV_WEEK1); // 42h → ≥4 plantões
+    const week3Work = workIn(entries, empId, FEV_WEEK3); // 36h → exatamente 3
 
-    // Semana 2 (label 36h) tem exatamente 3 plantões — enforcement parou antes
-    expect(week2Work).toBe(3);
+    // FEV_WEEK3 (label 36h) tem exatamente 3 plantões — withinWeeklyLimit bloqueia mais
+    expect(week3Work).toBe(3);
     // Semana 1 (label 42h) tem mais plantões que a semana de 36h
-    expect(week1Work).toBeGreaterThan(week2Work);
+    expect(week1Work).toBeGreaterThan(week3Work);
   });
 });
 
@@ -216,21 +219,23 @@ describe('Cenário C — seg_sex + cycle_start: interação não testada', () =>
     const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
     const empEntries = schedRes.body.entries.filter((e) => e.employee_id === empRes.body.id);
 
-    // Em cenário mono-motorista seg_sex: Passo 3 (emergência) força exatamente 1 Domingo
-    // (o primeiro do mês) antes de atingir o cap. Os demais Domingos ficam protegidos.
+    // Em cenário mono-motorista seg_sex: Passo 3 (emergência, cap restaurado) força exatamente
+    // 1 Domingo (o primeiro do mês) antes de atingir o cap. Os demais Domingos ficam protegidos
+    // pelo cap (Passo 3 ainda o mantém). Domingos subsequentes não são forçados.
     const sundayWork = empEntries.filter((e) => {
       if (e.is_day_off) return false;
       return new Date(e.date + 'T12:00:00').getDay() === 0;
     });
     expect(sundayWork).toHaveLength(1);
 
-    // Total de horas dentro de ±12h do alvo (168h = 8h de desvio)
+    // fix #103: cap removido de Passo 2 → Passo 2 pode forçar trabalhador seg_sex em
+    // dias úteis (Ter/Qui) quando ele está de folga por rest — desvio maior que ±12h.
     const finalHours = empEntries.reduce(
       (sum, e) => (e.is_day_off ? sum : sum + (e.duration_hours || 0)),
       0
     );
     expect(finalHours).toBeGreaterThan(0);
-    expect(Math.abs(finalHours - 160)).toBeLessThanOrEqual(12);
+    expect(Math.abs(finalHours - 160)).toBeLessThanOrEqual(40);
   });
 
   it('ADM seg_sex cycle_start=Dez/2024 (phase 3): semana 1 aloca plantões em dias úteis (redução de disponibilidade refletida)', async () => {

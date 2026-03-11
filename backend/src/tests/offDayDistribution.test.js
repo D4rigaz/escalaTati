@@ -28,13 +28,12 @@ beforeEach(() => freshDb());
 describe('Teste 1 — distribuição básica: 2 motoristas com folgas distintas', () => {
   // Testa o mês de Março/2026 — um dos 6 meses afetados pelo bug original (#55).
   //
-  // O critério principal é sem_motorista_forcado = 0: se um dia ficou com todos
-  // de folga, o enforcement o corrigiu via Passo 1 (sem forçar descanso).
-  // Nota: com 2 motoristas (IDs 1 e 2), o primeiro dia de algumas semanas pode
-  // ter ambos de folga por rotação, mas o enforcement o resolve sem warning.
-  // O bug original era folgas IDÊNTICAS para todos — verificado abaixo via
-  // diff de conjuntos de folgas por semana.
-  it('Mar/2026: sem_motorista_forcado = 0; motoristas têm conjuntos de folgas distintos', async () => {
+  // O critério principal é que os motoristas NÃO tenham folgas idênticas (bug #55).
+  // Nota: sem COVERAGE_HOURS_CAP, o enforcement pode gerar sem_motorista_forcado
+  // nos últimos dias do mês (ex: Mar 29-30) quando todos os motoristas excederam
+  // o limite CLT semanal mas não há alternativa — isso é aceito como comportamento
+  // esperado com o cap removido (PO confirmado).
+  it('Mar/2026: motoristas têm conjuntos de folgas distintos (fix #55 preservado)', async () => {
     const db = freshDb();
     createEmployee(db, { name: 'Motorista A', setor: 'Transporte Ambulância' });
     createEmployee(db, { name: 'Motorista B', setor: 'Transporte Ambulância' });
@@ -44,11 +43,7 @@ describe('Teste 1 — distribuição básica: 2 motoristas com folgas distintas'
       .send({ month: 3, year: 2026, overwriteLocked: true });
     expect(genRes.status).toBe(200);
 
-    // Critério principal: nenhum enforcement forçado de 1º motorista
-    const forcados = genRes.body.warnings.filter((w) => w.type === 'sem_motorista_forcado');
-    expect(forcados).toHaveLength(0);
-
-    // Critério secundário: as folgas dos dois motoristas NÃO são idênticas por semana
+    // Critério principal: as folgas dos dois motoristas NÃO são idênticas por semana
     // (bug original: todos tinham exatamente as mesmas folgas)
     const schedRes = await request(app).get('/api/schedules?month=3&year=2026');
     const entries = schedRes.body.entries;
@@ -65,7 +60,7 @@ describe('Teste 1 — distribuição básica: 2 motoristas com folgas distintas'
   });
 
   // Verifica também Fev/2026 — outro mês crítico do bug original.
-  it('Fev/2026: sem_motorista_forcado = 0; motoristas têm conjuntos de folgas distintos', async () => {
+  it('Fev/2026: motoristas têm conjuntos de folgas distintos (fix #55 preservado)', async () => {
     const db = freshDb();
     createEmployee(db, { name: 'Motorista A', setor: 'Transporte Ambulância' });
     createEmployee(db, { name: 'Motorista B', setor: 'Transporte Ambulância' });
@@ -74,9 +69,6 @@ describe('Teste 1 — distribuição básica: 2 motoristas com folgas distintas'
       .post('/api/schedules/generate')
       .send({ month: 2, year: 2026, overwriteLocked: true });
     expect(genRes.status).toBe(200);
-
-    const forcados = genRes.body.warnings.filter((w) => w.type === 'sem_motorista_forcado');
-    expect(forcados).toHaveLength(0);
 
     const schedRes = await request(app).get('/api/schedules?month=2&year=2026');
     const entries = schedRes.body.entries;
@@ -98,8 +90,14 @@ describe('Teste 2 — 12 meses de 2026: distribuição de folgas com 3 motorista
   // Cada mês é testado com DB isolado (freshDb por iteração) para garantir
   // que o resultado não seja afetado por estado acumulado de meses anteriores.
   // 3 motoristas com IDs consecutivos → offsets 1%len, 2%len, 3%len → distintos.
-  it('Jan–Dez/2026: sem_motorista_forcado ≤ 1 em meses com cross-week isDiurno42h (Fev, Mar, Set)', async () => {
+  it('Jan–Dez/2026: fix #103 — cap removido de Passo 2; contagens de sem_motorista_forcado esperadas por mês', async () => {
     const MESES_CRITICOS = new Set([2, 3, 6, 9, 11, 12]);
+
+    // fix #103: cap removido de Passo 2 de enforceDailyCoverage → Passo 2 agora força
+    // motoristas com horas projetadas acima de 160h quando necessário para garantir cobertura.
+    // Resultado: mais sem_motorista_forcado, mas os dias com 0 cobertura são eliminados.
+    // Valores observados com 3 motoristas (2 Ambulância + 1 Hemodiálise), DB isolado por mês:
+    const FORCED_2026 = { 1:1, 2:0, 3:2, 4:2, 5:2, 6:2, 7:2, 8:2, 9:3, 10:1, 11:1, 12:2 };
 
     for (let month = 1; month <= 12; month++) {
       const db = freshDb();
@@ -114,14 +112,7 @@ describe('Teste 2 — 12 meses de 2026: distribuição de folgas com 3 motorista
 
       const forcados = res.body.warnings.filter((w) => w.type === 'sem_motorista_forcado');
       const critico = MESES_CRITICOS.has(month) ? ' ⚠ mês crítico do bug original' : '';
-      // fix #98B: meses com 2 semanas isDiurno42h consecutivas dentro do mês geram 1
-      // sem_motorista_forcado inevitável: todos os motoristas terminam no Sáb da semana N
-      // e o Dom da semana N+1 fica com rest=12h para todos (Sáb 19:00→Dom 07:00).
-      // Enforcement Passo 2 força 1 motorista → sem_motorista_forcado=1 (esperado).
-      // Meses afetados com cycle_start=Jan/2026: M2 (wi=0→1, phase2), M3 (wi=2→3, phase3),
-      // M9 (wi=3→4, phase3). M6/M12 não disparam porque os motoristas já atingiram o
-      // cap de 160h antes do Domingo problemático.
-      const maxForced = [2, 3, 9].includes(month) ? 1 : 0;
+      const maxForced = FORCED_2026[month] ?? 0;
       expect(
         forcados.length,
         `Mês ${month}/2026${critico}: ${forcados.length} warning(s) sem_motorista_forcado`
@@ -131,8 +122,11 @@ describe('Teste 2 — 12 meses de 2026: distribuição de folgas com 3 motorista
 
   // Teste pontual nos 6 meses críticos com assertion individual por mês,
   // para garantir visibilidade caso apenas alguns meses regridam.
-  it('meses críticos (Fev, Mar, Jun, Set, Nov, Dez): Fev/Mar/Set toleram 1 forcado (cross-week 42h), demais = 0', async () => {
+  it('meses críticos (Fev, Mar, Jun, Set, Nov, Dez): fix #103 — contagens esperadas com cap removido de Passo 2', async () => {
     const CRITICOS = [2, 3, 6, 9, 11, 12];
+
+    // fix #103: Valores esperados com cap removido de Passo 2 (enforcement força workers > 160h)
+    const FORCED_CRITICOS = { 2:0, 3:2, 6:2, 9:3, 11:1, 12:2 };
 
     for (const month of CRITICOS) {
       const db = freshDb();
@@ -146,8 +140,7 @@ describe('Teste 2 — 12 meses de 2026: distribuição de folgas com 3 motorista
       expect(res.status).toBe(200);
 
       const forcados = res.body.warnings.filter((w) => w.type === 'sem_motorista_forcado');
-      // fix #98B: Fev, Mar e Set/2026 têm 1 sem_motorista_forcado inevitável (cross-week isDiurno42h).
-      const maxForcedCritico = [2, 3, 9].includes(month) ? 1 : 0;
+      const maxForcedCritico = FORCED_CRITICOS[month] ?? 0;
       expect(
         forcados.length,
         `Mês crítico ${month}/2026: ${forcados.length} warning(s) sem_motorista_forcado`
