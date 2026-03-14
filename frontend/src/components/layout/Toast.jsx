@@ -1,9 +1,10 @@
-import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, AlertTriangle, Info } from 'lucide-react';
 import useStore from '../../store/useStore.js';
 
 const icons = {
   success: <CheckCircle size={18} className="text-green-500" />,
   error: <AlertCircle size={18} className="text-red-500" />,
+  warning: <AlertTriangle size={18} className="text-amber-500" />,
   info: <Info size={18} className="text-blue-500" />,
 };
 

@@ -72,6 +72,9 @@ export default function SchedulePage() {
         title: 'Escala gerada!',
         message: `${result.results?.length || 0} funcionário(s) escalado(s)`,
       });
+      for (const cw of result.crew_warnings || []) {
+        addToast({ type: 'warning', title: 'Configuração de equipe', message: cw.message, duration: 8000 });
+      }
     } catch (err) {
       addToast({ type: 'error', title: 'Erro ao gerar escala', message: err.message });
     }
