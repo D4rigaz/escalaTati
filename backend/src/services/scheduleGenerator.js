@@ -1278,6 +1278,9 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
  *   Emite sem_motorista_forcado (1º) ou segundo_motorista_forcado (2º+).
  * Passo 3 (emergência): força até candidatos seg_sex em Sáb/Dom quando não há outro.
  *   Ainda respeita limite CLT semanal. Emite warning sem_motorista_forcado_seg_sex para rastreabilidade.
+ * Passo 4 (último recurso): ignora limite CLT semanal — usado quando todos workers atingiram o limite
+ *   CLT semanal antes do fim da semana. Seleciona candidato com menor carga mensal para minimizar
+ *   sobrecarga. Emite clt_weekly_overflow para rastreabilidade.
  * Emite sem_motorista (filled=0) ou cobertura_minima_insuficiente (filled>0 mas <MIN)
  *   quando não há candidatos disponíveis.
  */
@@ -1487,6 +1490,32 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
         forced = true;
         break;
       }
+      // Passo 4 (último recurso): ignora limite CLT semanal — todos os passos anteriores falharam.
+      // Ocorre quando todos os workers atingiram o limite CLT semanal antes do fim da semana.
+      // Seleciona o candidato com menor carga mensal para minimizar sobrecarga.
+      if (!forced) {
+        const byHours = [...candidates].sort(
+          (a, b) =>
+            getEmployeeHours(db, a.emp.id, startDate, endDate) -
+            getEmployeeHours(db, b.emp.id, startDate, endDate)
+        );
+        for (const { folgaId, emp } of byHours) {
+          if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+          const shift = getShiftForEmp(emp);
+          db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
+            .run(shift.id, folgaId);
+          warnings.push({
+            type: 'clt_weekly_overflow',
+            date,
+            employee: emp.name,
+            message: `${date}: cobertura forçada para ${emp.name} — limite CLT semanal excedido (último recurso)`,
+          });
+          filled++;
+          forced = true;
+          break;
+        }
+      }
+
       if (!forced) {
         if (filled === 0) {
           warnings.push({ type: 'sem_motorista', date, message: `${date}: nenhum motorista escalado` });

@@ -72,9 +72,8 @@ const APR_DATES = Array.from({ length: APR_DAYS }, (_, i) => {
 // não há Noturno disponível para Apr1-Apr4 sem violar rest CLT.
 const PARTIAL_WEEK_DATES = new Set(['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-04']);
 
-// Apr10 excluída de R2: workers atingem limite CLT semanal (semana Apr5-Apr11) antes de Apr10.
-// TODO: abrir issue para corrigir distribuição semanal e garantir cobertura em todos os dias.
-const R2_SKIP_DATES = new Set(['2026-04-10']);
+// Fix #107: Apr10 agora coberta pelo Passo 4 (clt_weekly_overflow) — sem exclusão necessária.
+const R2_SKIP_DATES = new Set();
 
 // ── Helpers de criação via API ────────────────────────────────────────────────
 
