@@ -510,8 +510,11 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         const isDiurnoPartialWeek = !isNoturno && cltWi < 0;
 
         if (isDiurnoPartialWeek) {
-          // Posições pares: [0, 2, 4, 6] filtradas por disponibilidade e rest adequado
-          const evenPositions = [0, 2, 4, 6].filter((i) => i < freeInWeek.length);
+          // Fix #104B: rotacionar posição de início por employee.id % 2 para distribuir
+          // motoristas em dias diferentes da semana parcial, evitando que todos fiquem
+          // concentrados nos mesmos dias e causem enforcement com rest < 24h.
+          const rotOffset = employee.id % 2;
+          const evenPositions = [rotOffset, rotOffset + 2, rotOffset + 4, rotOffset + 6].filter((i) => i < freeInWeek.length);
           const diurnoPartialWorkDates = new Set();
 
           for (const pi of evenPositions) {
@@ -713,6 +716,24 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
           }
         }
         } // end else (isDiurnoPartialWeek)
+      }
+
+      // Fix #104: normalizar lastShiftEnd/lastShiftName após cada semana.
+      // A recovery loop pode sobrescrever lastShiftEnd com um turno anterior ao último
+      // trabalho real (ex: recupera Apr21 depois de Apr25 já ter sido colocado por selectedWork),
+      // fazendo a próxima semana calcular rest em relação a uma data mais antiga e permitir
+      // violações de MIN_REST_HOURS (ex: Apr25 Diurno 19:00 → Apr26 Manhã 07:00 = 12h).
+      {
+        const latestWork = entries
+          .filter(e => !e.is_day_off && e.shift_type_id)
+          .reduce((latest, e) => (!latest || e.date > latest.date) ? e : latest, null);
+        if (latestWork) {
+          const latestShift = shiftMap[latestWork.shift_type_id];
+          if (latestShift) {
+            lastShiftEnd = computeShiftEnd(latestWork.date, latestShift);
+            lastShiftName = latestShift.name;
+          }
+        }
       }
     }
   }
