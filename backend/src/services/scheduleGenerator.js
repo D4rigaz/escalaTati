@@ -136,6 +136,50 @@ function getWeekTypeFromPhase(phase, weekIndex) {
   return patterns[phase][Math.min(weekIndex, 3)];
 }
 
+// Configuração mínima de crew recomendada (decisão PO — issue #108)
+const MIN_HEMO_WORKERS   = 4; // para garantir R5: ≥2 Hemo Diurno em todos os dias úteis
+const MIN_AMB_NOTURNO    = 4; // para garantir R3: ≥2 Noturno Amb em Qui/Sáb
+
+/**
+ * Verifica se o elenco ativo atende à configuração mínima recomendada.
+ * Retorna array de crew_warnings (vazio se tudo OK).
+ */
+function checkCrewMinimum(db, shiftTypes) {
+  const crew_warnings = [];
+  const noturnoShift = shiftTypes.find((s) => s.name === SHIFT_NOTURNO_NAME);
+
+  const hemoCount = db.prepare(
+    `SELECT COUNT(DISTINCT e.id) as c FROM employees e
+     JOIN employee_sectors es ON es.employee_id = e.id
+     WHERE e.active = 1 AND es.setor = ?`
+  ).get(SETOR_HEMO).c;
+
+  if (hemoCount < MIN_HEMO_WORKERS) {
+    crew_warnings.push({
+      type: 'crew_hemo_insuficiente',
+      message: `Cobertura Diurno Hemodiálise pode ser insuficiente: ${hemoCount}/${MIN_HEMO_WORKERS} workers ativos (mínimo recomendado para garantir ≥2/dia útil)`,
+    });
+  }
+
+  const ambNoturnoCount = noturnoShift
+    ? db.prepare(
+        `SELECT COUNT(DISTINCT e.id) as c FROM employees e
+         JOIN employee_sectors es ON es.employee_id = e.id
+         LEFT JOIN employee_rest_rules r ON r.employee_id = e.id
+         WHERE e.active = 1 AND es.setor = ? AND r.preferred_shift_id = ?`
+      ).get(SETOR_AMBUL, noturnoShift.id).c
+    : 0;
+
+  if (ambNoturnoCount < MIN_AMB_NOTURNO) {
+    crew_warnings.push({
+      type: 'crew_amb_noturno_insuficiente',
+      message: `Cobertura Noturno Ambulância pode ser insuficiente: ${ambNoturnoCount}/${MIN_AMB_NOTURNO} workers com turno Noturno preferido (mínimo recomendado para garantir ≥2 em Qui/Sáb)`,
+    });
+  }
+
+  return crew_warnings;
+}
+
 /**
  * Main schedule generation algorithm (greedy + correction step)
  * Target: 160h/month per employee
@@ -187,6 +231,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
     }
   }
 
+  const crew_warnings = checkCrewMinimum(db, shiftTypes);
   const warnings = [];
   const results = [];
 
@@ -214,7 +259,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
     'INSERT INTO schedule_generations (month, year, params_json) VALUES (?, ?, ?)'
   ).run(month, year, JSON.stringify({ overwriteLocked, employeeCount: employees.length, warnings, results }));
 
-  return { results, warnings };
+  return { results, warnings, crew_warnings };
 }
 
 function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth, genYear) {
