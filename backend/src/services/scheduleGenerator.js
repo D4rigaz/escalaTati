@@ -1,5 +1,34 @@
 import { getDb, runTransaction } from '../db/database.js';
-import { getDaysInMonth, format } from 'date-fns';
+import { format } from 'date-fns';
+
+/**
+ * Retorna o período real da escala para um mês/ano:
+ *   startDate = primeiro domingo do mês M
+ *   endDate   = sábado anterior ao primeiro domingo do mês M+1
+ *
+ * Regra de negócio (issue #112): o ciclo de trabalho dom_sab começa num domingo.
+ * O período sempre contém semanas completas (Dom→Sáb), sem semana parcial inicial.
+ */
+export function getSchedulePeriod(month, year) {
+  // Primeiro domingo do mês M
+  const firstDayMs = Date.UTC(year, month - 1, 1);
+  const dow = new Date(firstDayMs).getUTCDay(); // 0=Dom
+  const daysToFirstSunday = dow === 0 ? 0 : 7 - dow;
+  const startDate = format(new Date(Date.UTC(year, month - 1, 1 + daysToFirstSunday)), 'yyyy-MM-dd');
+
+  // Primeiro domingo do mês M+1
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear  = month === 12 ? year + 1 : year;
+  const firstDayNextMs = Date.UTC(nextYear, nextMonth - 1, 1);
+  const dowNext = new Date(firstDayNextMs).getUTCDay();
+  const daysToFirstSundayNext = dowNext === 0 ? 0 : 7 - dowNext;
+  const firstSundayNextMs = Date.UTC(nextYear, nextMonth - 1, 1 + daysToFirstSundayNext);
+
+  // endDate = sábado antes do próximo primeiro domingo
+  const endDate = format(new Date(firstSundayNextMs - 24 * 60 * 60 * 1000), 'yyyy-MM-dd');
+
+  return { startDate, endDate };
+}
 
 // Pares de nomes que formam um "emendado" válido (sem descanso entre eles)
 export const EMENDADO_PAIRS = [
@@ -12,7 +41,8 @@ const MIN_REST_HOURS           = 24;  // Fixo, não editável (regra 10)
 const MAX_CONSECUTIVE_HOURS    = 18;  // Regra: máximo 18h consecutivas
 const MAX_CONSECUTIVE_WORK_DAYS = 6;  // Regra: máximo 6 dias de trabalho consecutivos
 const MIN_DAILY_COVERAGE        = 2;  // Regra 42: mínimo 2 motoristas por dia (issue #42)
-const TARGET_HOURS          = 160;
+// Issue #112: target calculado dinamicamente — weeks.length * TARGET_HOURS_PER_WEEK
+const TARGET_HOURS_PER_WEEK = 40;
 const DEFAULT_SHIFT_HOURS   = 12;   // Padrão esperado: plantão de 12 horas
 const SETOR_ADM             = 'Transporte Administrativo';
 const SETOR_AMBUL           = 'Transporte Ambulância';
@@ -195,11 +225,19 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   const diurnoShift  = shiftTypes.find((s) => s.name === SHIFT_DIURNO_NAME);
   const noturnoShift = shiftTypes.find((s) => s.name === SHIFT_NOTURNO_NAME);
 
-  const daysInMonth = getDaysInMonth(new Date(year, month - 1, 1));
+  // Issue #112: período começa no 1º domingo do mês, termina no sábado antes do 1º domingo do mês seguinte.
+  const { startDate: periodStart, endDate: periodEnd } = getSchedulePeriod(month, year);
   const dates = [];
-  for (let d = 1; d <= daysInMonth; d++) {
-    dates.push(format(new Date(year, month - 1, d), 'yyyy-MM-dd'));
+  let dateCursor = periodStart;
+  while (dateCursor <= periodEnd) {
+    dates.push(dateCursor);
+    const [cy, cm, cd] = dateCursor.split('-').map(Number);
+    dateCursor = format(new Date(Date.UTC(cy, cm - 1, cd + 1)), 'yyyy-MM-dd');
   }
+
+  // Issue #112: targetHours escala com o período (4 semanas = 160h, 5 semanas = 200h).
+  const periodWeeks = buildWeeks(dates);
+  const targetHours = periodWeeks.length * TARGET_HOURS_PER_WEEK;
 
   // Load employee sectors
   const employeeIds = employees.map((e) => e.id);
@@ -239,7 +277,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
     const result = runTransaction(() => {
       return generateForEmployee(
         db, employee, shiftTypes, shiftMap, dates,
-        overwriteLocked, warnings, allVacationDates, month, year
+        overwriteLocked, warnings, allVacationDates, month, year, targetHours
       );
     });
     results.push(result);
@@ -247,12 +285,12 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
 
   // Post-generation coverage checks (Rules 16, 19, 21, 22)
   if (diurnoShift) {
-    enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings);
+    enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings, targetHours);
   }
   if (noturnoShift) {
-    enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings);
+    enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings, targetHours);
   }
-  enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings);
+  enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings, targetHours);
 
   // Log generation
   db.prepare(
@@ -262,7 +300,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   return { results, warnings, crew_warnings };
 }
 
-function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth, genYear) {
+function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth, genYear, targetHours) {
   const rules = db
     .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
     .get(employee.id) || { min_rest_hours: MIN_REST_HOURS, preferred_shift_id: null };
@@ -315,13 +353,8 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     employee.cycle_start_year ?? new Date().getFullYear(),
     genMonth, genYear
   );
-  // Issue #96: Detectar semanas parciais (< 7 dias) no início e fim do mês.
-  // Meses que não começam num domingo têm uma semana inicial parcial.
-  // O índice CLT (wi) deve contar apenas a partir da primeira semana COMPLETA.
-  // Semanas parciais não recebem meta CLT — escalamos o que couber com rest ≥ 24h.
-  const firstWeekIsPartial = weeks.length > 0 && weeks[0].length < 7;
-  // cltWeekOffset: quantas semanas parciais há antes das semanas completas (0 ou 1)
-  const cltWeekOffset = firstWeekIsPartial ? 1 : 0;
+  // Issue #112: o período sempre começa num domingo → todas as semanas são completas (7 dias).
+  // cltWeekOffset removido — não há semanas parciais iniciais.
 
   let totalHours = 0;
   let lastShiftEnd = null;
@@ -347,7 +380,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   }
 
   const lockedWorkHours = totalHours;
-  const remainingHours = Math.max(0, TARGET_HOURS - lockedWorkHours);
+  const remainingHours = Math.max(0, targetHours - lockedWorkHours);
 
   if (isAdm) {
     // Ciclo 36/42/42 para Administrativo (10h/turno)
@@ -380,12 +413,8 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         lastShiftName = null;
       }
 
-      // Issue #96: wi CLT começa em 0 na primeira semana COMPLETA.
-      // Se a semana atual é parcial (cltWi < 0), escalar sem meta CLT (usa máx 3 turnos conservador).
-      const cltWi = wi - cltWeekOffset;
-      const weekTypeAdm = cltWi >= 0
-        ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi)
-        : '36h'; // semana parcial: sem meta CLT — usa 3 turnos como padrão conservador
+      // Issue #112: cltWi = wi (período sempre começa num domingo, sem semana parcial inicial).
+      const weekTypeAdm = getWeekTypeFromPhase(effectiveCycleMonth, wi);
       const maxTurnosNaSemana = weekTypeAdm === '36h' ? 3 : 4;
       const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
       const actualOffInWeek = freeInWeek.length - Math.max(0, maxWorkInWeek);
@@ -464,12 +493,9 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       // Seleciona 4 posições com espaçamento de 2 dias (índices 0,2,4,6 em available),
       // garantindo rest ≥ 36h entre qualquer par DIURNO(19:00)→DIURNO(07:00) do próximo dia.
       // Rotaciona qual posição recebe o turno extra de 6h via employee.id % 4.
-      // Issue #96: wi CLT começa em 0 na primeira semana COMPLETA.
-      // Semanas parciais (cltWi < 0) → '36h' como fallback (3 plantões, sem extra 6h).
-      const cltWi = wi - cltWeekOffset;
-      const weekType = cltWi >= 0
-        ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi)
-        : '36h'; // semana parcial: sem meta CLT — sem turno extra 6h
+      // Issue #112: período sempre começa num domingo → cltWi = wi (sem offset).
+      const cltWi = wi;
+      const weekType = getWeekTypeFromPhase(effectiveCycleMonth, cltWi);
       const isDiurno42h = !isNoturno && weekType === '42h';
 
       if (isDiurno42h) {
@@ -548,61 +574,8 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
         }
       } else {
         // Fluxo normal: NOTURNO, ADM, DIURNO 36h, etc.
-
-        // Fix #98A: DIURNO em semana parcial — aplica espaçamento de posições pares [0,2,...]
-        // para evitar turnos consecutivos com rest < 24h (ex: Qua→Qui em Abr/2026).
-        // Posições pares garantem pelo menos 1 dia de folga entre turnos DIURNO consecutivos.
-        const isDiurnoPartialWeek = !isNoturno && cltWi < 0;
-
-        if (isDiurnoPartialWeek) {
-          // Fix #104B: rotacionar posição de início por employee.id % 2 para distribuir
-          // motoristas em dias diferentes da semana parcial, evitando que todos fiquem
-          // concentrados nos mesmos dias e causem enforcement com rest < 24h.
-          const rotOffset = employee.id % 2;
-          const evenPositions = [rotOffset, rotOffset + 2, rotOffset + 4, rotOffset + 6].filter((i) => i < freeInWeek.length);
-          const diurnoPartialWorkDates = new Set();
-
-          for (const pi of evenPositions) {
-            const date = freeInWeek[pi];
-            // Check rest from lastShiftEnd (pode ser cross-semana ou início do mês)
-            if (lastShiftEnd && preferredShift) {
-              const dStart = computeShiftStart(date, preferredShift);
-              if (dStart) {
-                const restHours = (dStart - lastShiftEnd) / (1000 * 60 * 60);
-                if (restHours >= 0 && restHours < MIN_REST_HOURS) continue;
-              }
-            }
-            diurnoPartialWorkDates.add(date);
-          }
-
-          const shiftsForSelectPartial = (rules.preferred_shift_id && !isNoturno) ? [preferredShift] : twelveHourShifts;
-          for (const date of freeInWeek) {
-            if (diurnoPartialWorkDates.has(date)) {
-              const shift = selectShift(shiftsForSelectPartial, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
-              if (shift) {
-                entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
-                totalHours += shift.duration_hours;
-                const shiftStart = computeShiftStart(date, shift);
-                const restHours = lastShiftEnd
-                  ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
-                  : Infinity;
-                consecutiveHours = restHours === 0
-                  ? consecutiveHours + shift.duration_hours
-                  : shift.duration_hours;
-                lastShiftEnd = computeShiftEnd(date, shift);
-                lastShiftName = shift.name;
-              } else {
-                entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
-                consecutiveHours = 0;
-                lastShiftName = null;
-              }
-            } else {
-              entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
-              consecutiveHours = 0;
-              lastShiftName = null;
-            }
-          }
-        } else {
+        // Issue #112: isDiurnoPartialWeek removido — o período sempre começa num domingo,
+        // portanto não há semana parcial inicial e este caminho especial nunca era atingido.
 
         // Garante mínimo 1 folga/semana quando não há férias ou forced-off (Regra: máx 6 dias consecutivos)
         const existingOffInWeek = vacInWeek.length + forcedOff.length;
@@ -760,7 +733,6 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
             }
           }
         }
-        } // end else (isDiurnoPartialWeek)
       }
 
       // Fix #104: normalizar lastShiftEnd/lastShiftName após cada semana.
@@ -784,7 +756,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   }
 
   // Correction step — preserva lockedOffDates (férias) e respeita limite semanal CLT
-  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, lockedOffDates, weeks, effectiveCycleMonth);
+  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, targetHours, preferredShift, lockedOffDates, weeks, effectiveCycleMonth);
 
   // Persist
   const insertEntry = db.prepare(
@@ -801,25 +773,22 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     return sum;
   }, 0);
 
-  const deviation = finalHours - TARGET_HOURS;
+  const deviation = finalHours - targetHours;
   if (Math.abs(deviation) > 12) {
     warnings.push({
       employee: employee.name,
       hours: finalHours,
       deviation,
-      message: `${employee.name}: ${finalHours}h (desvio de ${deviation > 0 ? '+' : ''}${deviation}h do alvo de 160h)`,
+      message: `${employee.name}: ${finalHours}h (desvio de ${deviation > 0 ? '+' : ''}${deviation}h do alvo de ${targetHours}h)`,
     });
   }
 
-  // Issue #96: semanas parciais recebem label 'partial', semanas CLT usam cltWi.
-  const weekClassifications = weeks.map((week, wi) => {
-    const cltWi = wi - cltWeekOffset;
-    return {
-      weekIndex: wi,
-      type: cltWi >= 0 ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi) : 'partial',
-      partial: week.length < 7,
-    };
-  });
+  // Issue #112: todas as semanas são completas — cltWi = wi (sem offset).
+  const weekClassifications = weeks.map((week, wi) => ({
+    weekIndex: wi,
+    type: getWeekTypeFromPhase(effectiveCycleMonth, wi),
+    partial: false,
+  }));
 
   return { employee: employee.name, hours: finalHours, weekClassifications };
 }
@@ -976,11 +945,8 @@ function canAddExtraShiftInMemory(entries, date, shift, shiftMap) {
   return true;
 }
 
-/**
- * Employees already at/above this hours threshold are not eligible for
- * coverage enforcement conversions — they already met their monthly target.
- */
-const COVERAGE_HOURS_CAP = TARGET_HOURS;
+// Issue #112: targetHours removido como constante global — passado como parâmetro targetHours
+// em cada função de enforcement para escalar corretamente com períodos de 4 ou 5 semanas.
 
 /**
  * Returns the current total worked hours for an employee in the month dates range.
@@ -1001,7 +967,7 @@ function getEmployeeHours(db, employeeId, startDate, endDate) {
  * Converte folgas (não bloqueadas) dos motoristas elegíveis se necessário,
  * respeitando o limite semanal CLT de cada motorista.
  */
-function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings) {
+function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings, targetHours) {
   const startDate = dates[0];
   const endDate = dates[dates.length - 1];
 
@@ -1012,33 +978,20 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
   // Agrupa datas em semanas (Dom–Sáb) para verificação do limite semanal CLT
   const weeks = buildWeeks(dates);
 
-  // Issue #103: detectar semana parcial inicial (mesmo critério de generateForEmployee).
-  // Se o mês não começa num domingo, a semana 0 é parcial e não conta como semana CLT.
-  // cltWeekOffset=1 desloca o índice CLT para que a semana 1 (primeira completa) seja wi_clt=0.
-  const firstWeekIsPartial = weeks.length > 0 && weeks[0].length < 7;
-  const cltWeekOffset = firstWeekIsPartial ? 1 : 0;
+  // Issue #112: período sempre começa num domingo → cltWeekOffset removido.
 
-  /**
-   * Retorna o início e fim da semana à qual `date` pertence.
-   */
   function getWeekBounds(date) {
     const week = weeks.find((w) => w.includes(date));
     if (!week) return null;
     return { weekStart: week[0], weekEnd: week[week.length - 1], weekIndex: weeks.indexOf(week) };
   }
 
-  /**
-   * Verifica se converter o candidato `emp` na data `date` para o turno `shift`
-   * ultrapassaria o limite semanal CLT do motorista.
-   * Retorna true se for SEGURO converter (limite não excedido); false caso contrário.
-   */
   function withinWeeklyLimit(emp, date, shift) {
     const bounds = getWeekBounds(date);
-    if (!bounds) return true; // sem contexto de semana — permite por segurança
+    if (!bounds) return true;
 
     const setores = employeeSectorsMap[emp.id] || [];
     const isAdm = setores.includes(SETOR_ADM);
-    // Para motoristas não-ADM, Diurno não tem turno extra → isNoturno = false
     const isNoturno = false;
 
     const phase = calculateEffectiveCycleMonth(
@@ -1046,12 +999,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
       emp.cycle_start_year ?? genYear,
       genMonth, genYear
     );
-    // Issue #103: aplicar cltWeekOffset para alinhar índice de semana com o gerador.
-    // Semanas parciais (cltWi < 0) usam '36h' como fallback — sem meta CLT.
-    const cltWi = bounds.weekIndex - cltWeekOffset;
-    const weekType = cltWi >= 0
-      ? getWeekTypeFromPhase(phase, cltWi)
-      : '36h';
+    const weekType = getWeekTypeFromPhase(phase, bounds.weekIndex);
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
     if (cltLimit.type === 'shifts') {
@@ -1103,7 +1051,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= targetHours) continue;
         if (!withinWeeklyLimit(emp, date, diurnoShift)) continue;
         db.prepare(
           'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
@@ -1147,7 +1095,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= targetHours) continue;
         if (!withinWeeklyLimit(emp, date, diurnoShift)) continue;
         db.prepare(
           'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
@@ -1176,7 +1124,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
  * Seg/Qua/Sex (dow 1,3,5): ≥1 motorista Ambulância no Noturno.
  * Respeita o limite semanal CLT de cada motorista.
  */
-function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings) {
+function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings, targetHours) {
   const startDate = dates[0];
   const endDate = dates[dates.length - 1];
 
@@ -1187,12 +1135,9 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
   // Agrupa datas em semanas (Dom–Sáb) para verificação do limite semanal CLT
   const weeks = buildWeeks(dates);
 
-  // Issue #103: detectar semana parcial inicial (mesmo critério de generateForEmployee).
-  const firstWeekIsPartial = weeks.length > 0 && weeks[0].length < 7;
-  const cltWeekOffset = firstWeekIsPartial ? 1 : 0;
+  // Issue #112: período sempre começa num domingo → cltWeekOffset removido.
 
   // Cache do turno preferido por employee_id — usado para não forçar NOTURNO em motoristas DIURNO.
-  // Bug #87: enforceNocturnalCoverage não verificava preferred_shift antes de converter.
   const preferredShiftNameByEmp = {};
   for (const emp of employees) {
     const row = db
@@ -1206,27 +1151,18 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
     preferredShiftNameByEmp[emp.id] = row?.shift_name ?? null;
   }
 
-  /**
-   * Retorna os limites da semana à qual `date` pertence.
-   */
   function getWeekBounds(date) {
     const week = weeks.find((w) => w.includes(date));
     if (!week) return null;
     return { weekStart: week[0], weekEnd: week[week.length - 1], weekIndex: weeks.indexOf(week) };
   }
 
-  /**
-   * Verifica se converter o candidato `emp` na data `date` para o turno `shift`
-   * ultrapassaria o limite semanal CLT do motorista.
-   * Para noturno enforcement: o motorista tem turno noturno, isNoturno=true.
-   */
   function withinWeeklyLimit(emp, date, shift) {
     const bounds = getWeekBounds(date);
     if (!bounds) return true;
 
     const setores = employeeSectorsMap[emp.id] || [];
     const isAdm = setores.includes(SETOR_ADM);
-    // O enforcement noturno converte para turno Noturno → isNoturno = true para não-ADM
     const isNoturno = !isAdm;
 
     const phase = calculateEffectiveCycleMonth(
@@ -1234,11 +1170,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
       emp.cycle_start_year ?? genYear,
       genMonth, genYear
     );
-    // Issue #103: aplicar cltWeekOffset para alinhar índice de semana com o gerador.
-    const cltWi = bounds.weekIndex - cltWeekOffset;
-    const weekType = cltWi >= 0
-      ? getWeekTypeFromPhase(phase, cltWi)
-      : '36h';
+    const weekType = getWeekTypeFromPhase(phase, bounds.weekIndex);
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
     if (cltLimit.type === 'shifts') {
@@ -1291,7 +1223,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!canAssignShift(db, emp.id, date, noturnoShift)) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= targetHours) continue;
         if (!withinWeeklyLimit(emp, date, noturnoShift)) continue;
         db.prepare(
           'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
@@ -1329,7 +1261,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
  * Emite sem_motorista (filled=0) ou cobertura_minima_insuficiente (filled>0 mas <MIN)
  *   quando não há candidatos disponíveis.
  */
-export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings) {
+export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings, targetHours) {
   const defaultShift =
     shiftTypes.find((s) => s.duration_hours === DEFAULT_SHIFT_HOURS) || shiftTypes[0];
 
@@ -1343,11 +1275,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
   // Agrupa datas em semanas (Dom–Sáb) para verificação do limite semanal CLT
   const weeks = buildWeeks(dates);
 
-  // Issue #103: detectar semana parcial inicial (mesmo critério de generateForEmployee).
-  // Se o mês não começa num domingo, a semana 0 é parcial e não conta como semana CLT.
-  // cltWeekOffset=1 desloca o índice CLT para que a semana 1 (primeira completa) seja wi_clt=0.
-  const firstWeekIsPartial = weeks.length > 0 && weeks[0].length < 7;
-  const cltWeekOffset = firstWeekIsPartial ? 1 : 0;
+  // Issue #112: período sempre começa num domingo → cltWeekOffset removido.
 
   // Cache preferred shift por employee_id (definido antes de withinWeeklyLimit que o referencia)
   const preferredShiftCache = {};
@@ -1368,27 +1296,18 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
     return fallback;
   };
 
-  /**
-   * Retorna os limites da semana à qual `date` pertence.
-   */
   function getWeekBounds(date) {
     const week = weeks.find((w) => w.includes(date));
     if (!week) return null;
     return { weekStart: week[0], weekEnd: week[week.length - 1], weekIndex: weeks.indexOf(week) };
   }
 
-  /**
-   * Verifica se converter o candidato `emp` na data `date` para o turno `shift`
-   * ultrapassaria o limite semanal CLT do motorista.
-   * Retorna true se for SEGURO converter (limite não excedido); false caso contrário.
-   */
   function withinWeeklyLimit(emp, date, shift) {
     const bounds = getWeekBounds(date);
     if (!bounds) return true;
 
     const setores = employeeSectorsMap[emp.id] || [];
     const isAdm = setores.includes(SETOR_ADM);
-    // Usa o turno preferido para determinar isNoturno
     const empShift = getShiftForEmp(emp);
     const isNoturno = !isAdm && empShift?.name === SHIFT_NOTURNO_NAME;
 
@@ -1397,12 +1316,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       emp.cycle_start_year ?? genYear,
       genMonth, genYear
     );
-    // Issue #103: aplicar cltWeekOffset para alinhar índice de semana com o gerador.
-    // Semanas parciais (cltWi < 0) usam '36h' como fallback — sem meta CLT.
-    const cltWi = bounds.weekIndex - cltWeekOffset;
-    const weekType = cltWi >= 0
-      ? getWeekTypeFromPhase(phase, cltWi)
-      : '36h';
+    const weekType = getWeekTypeFromPhase(phase, bounds.weekIndex);
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
     if (cltLimit.type === 'shifts') {
@@ -1482,7 +1396,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       let assigned = false;
       for (const { folgaId, emp } of candidates) {
         if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= targetHours) continue;
         const shift = getShiftForEmp(emp);
         if (!canAssignShift(db, emp.id, date, shift)) continue;
         if (!withinWeeklyLimit(emp, date, shift)) continue;
@@ -1520,7 +1434,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       // Passo 3 (emergência): força candidato seg_sex em Sáb/Dom — equipe insuficiente de dom_sab
       // Ainda respeita cap e limite CLT semanal (cap restaurado: evita seg_sex acima de 160h no Domingo).
       for (const { folgaId, emp } of candidates) {
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (getEmployeeHours(db, emp.id, startDate, endDate) >= targetHours) continue;
         const shift = getShiftForEmp(emp);
         if (!withinWeeklyLimit(emp, date, shift)) continue;
         db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
@@ -1545,7 +1459,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
             getEmployeeHours(db, b.emp.id, startDate, endDate)
         );
         for (const { folgaId, emp } of byHours) {
-          if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+          if (getEmployeeHours(db, emp.id, startDate, endDate) >= targetHours) continue;
           const shift = getShiftForEmp(emp);
           db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
             .run(shift.id, folgaId);
@@ -1721,16 +1635,11 @@ export function correctHours(
   const isNoturno = preferredShift?.name === SHIFT_NOTURNO_NAME;
 
   // Monta mapa semana → {weekStart, weekEnd, weekIndex, weekType, cltLimit}
-  // para verificação do limite CLT por semana em conversões de folga→trabalho.
-  // Issue #96: semanas parciais (< 7 dias) usam '42h' como fallback conservador —
-  // não remover entries de semanas parciais que estão naturalmente abaixo do limite.
-  const firstWeekIsPartialCH = weeks.length > 0 && weeks[0].length < 7;
-  const cltWeekOffsetCH = firstWeekIsPartialCH ? 1 : 0;
+  // Issue #112: período sempre começa num domingo → todas semanas completas, sem offset.
   const weekMeta = weeks.map((week, wi) => {
-    const cltWiCH = wi - cltWeekOffsetCH;
-    const weekType = (effectiveCycleMonth !== null && cltWiCH >= 0)
-      ? getWeekTypeFromPhase(effectiveCycleMonth, cltWiCH)
-      : '42h'; // fallback conservador: semanas parciais ou sem contexto de fase
+    const weekType = effectiveCycleMonth !== null
+      ? getWeekTypeFromPhase(effectiveCycleMonth, wi)
+      : '42h'; // fallback conservador: sem contexto de fase
     return {
       weekStart: week[0],
       weekEnd: week[week.length - 1],
