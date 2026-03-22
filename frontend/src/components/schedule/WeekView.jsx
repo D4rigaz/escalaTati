@@ -1,17 +1,26 @@
 import { useMemo } from 'react';
-import { getDaysInMonth } from 'date-fns';
 import { Lock } from 'lucide-react';
 
 const DAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const MONTH_ABBR  = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
 export default function WeekView({ scheduleData, currentMonth, currentYear, onEntryClick }) {
   const { dates, employees, entryMatrix } = useMemo(() => {
-    const daysInMonth = getDaysInMonth(new Date(currentYear, currentMonth - 1, 1));
-    const dates = [];
-    for (let d = 1; d <= daysInMonth; d++) {
-      const date = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      dates.push({ date, dayNum: d, dayLabel: DAY_LABELS[new Date(date).getDay()] });
-    }
+    // Deriva as datas diretamente das entries — o período pode cruzar o mês calendário
+    const allDates = scheduleData?.entries
+      ? [...new Set(scheduleData.entries.map((e) => e.date))].sort()
+      : [];
+
+    const dates = allDates.map((date) => {
+      const d = new Date(date + 'T12:00:00');
+      const dayNum  = d.getDate();
+      const dayMonth = d.getMonth() + 1; // 1-based
+      // Mostra "dia/mês" quando a data pertence a um mês diferente do calendário selecionado
+      const label = dayMonth !== currentMonth
+        ? `${dayNum}/${MONTH_ABBR[dayMonth - 1]}`
+        : String(dayNum);
+      return { date, dayNum: label, dayLabel: DAY_LABELS[d.getDay()], isOtherMonth: dayMonth !== currentMonth };
+    });
 
     if (!scheduleData?.entries) return { dates, employees: [], entryMatrix: {} };
 
@@ -54,13 +63,15 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
             <th className="sticky left-0 bg-gray-50 text-left px-3 py-2 font-semibold text-gray-600 border border-gray-200 min-w-[140px]">
               Motorista
             </th>
-            {dates.map(({ date, dayNum, dayLabel }) => {
-              const isWeekend = [0, 6].includes(new Date(date).getDay());
+            {dates.map(({ date, dayNum, dayLabel, isOtherMonth }) => {
+              const isWeekend = [0, 6].includes(new Date(date + 'T12:00:00').getDay());
               return (
                 <th
                   key={date}
                   className={`px-1 py-1 text-center font-medium border border-gray-200 min-w-[36px] ${
-                    isWeekend ? 'bg-blue-50 text-blue-700' : 'text-gray-600'
+                    isOtherMonth
+                      ? 'bg-purple-50 text-purple-600'
+                      : isWeekend ? 'bg-blue-50 text-blue-700' : 'text-gray-600'
                   }`}
                 >
                   <div>{dayLabel}</div>

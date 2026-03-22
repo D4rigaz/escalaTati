@@ -1,5 +1,37 @@
 import { getDb, runTransaction } from '../db/database.js';
-import { getDaysInMonth, format } from 'date-fns';
+import { format } from 'date-fns';
+
+/**
+ * Retorna o período real da escala para um dado mês/ano.
+ * Início: primeiro domingo do mês M.
+ * Fim: sábado anterior ao primeiro domingo do mês M+1.
+ * Garante semanas sempre completas (Dom→Sáb) — sem semana parcial no início.
+ *
+ * Exemplos:
+ *   Abril/2026: 05/04 → 02/05 (4 semanas completas)
+ *   Março/2026: 01/03 → 04/04 (5 semanas — dia 01 já é domingo)
+ */
+export function getSchedulePeriod(month, year) {
+  const firstDay = new Date(year, month - 1, 1);
+  const dow = firstDay.getDay(); // 0=Dom
+  const daysToSun = dow === 0 ? 0 : 7 - dow;
+  const start = new Date(year, month - 1, 1 + daysToSun);
+
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear  = month === 12 ? year + 1 : year;
+  const firstDayNext = new Date(nextYear, nextMonth - 1, 1);
+  const dowNext = firstDayNext.getDay();
+  const daysToSunNext = dowNext === 0 ? 0 : 7 - dowNext;
+  const nextFirstSun = new Date(nextYear, nextMonth - 1, 1 + daysToSunNext);
+
+  const end = new Date(nextFirstSun);
+  end.setDate(end.getDate() - 1); // sábado anterior ao próximo primeiro domingo
+
+  return {
+    startDate: format(start, 'yyyy-MM-dd'),
+    endDate:   format(end,   'yyyy-MM-dd'),
+  };
+}
 
 // Pares de nomes que formam um "emendado" válido (sem descanso entre eles)
 export const EMENDADO_PAIRS = [
@@ -195,10 +227,13 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   const diurnoShift  = shiftTypes.find((s) => s.name === SHIFT_DIURNO_NAME);
   const noturnoShift = shiftTypes.find((s) => s.name === SHIFT_NOTURNO_NAME);
 
-  const daysInMonth = getDaysInMonth(new Date(year, month - 1, 1));
+  const { startDate: periodStart, endDate: periodEnd } = getSchedulePeriod(month, year);
   const dates = [];
-  for (let d = 1; d <= daysInMonth; d++) {
-    dates.push(format(new Date(year, month - 1, d), 'yyyy-MM-dd'));
+  const cursor = new Date(periodStart + 'T12:00:00');
+  const periodEndDate = new Date(periodEnd + 'T12:00:00');
+  while (cursor <= periodEndDate) {
+    dates.push(format(cursor, 'yyyy-MM-dd'));
+    cursor.setDate(cursor.getDate() + 1);
   }
 
   // Load employee sectors
@@ -784,7 +819,9 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   }
 
   // Correction step — preserva lockedOffDates (férias) e respeita limite semanal CLT
-  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, lockedOffDates, weeks, effectiveCycleMonth);
+  // Passa isAdm explicitamente para que correctHours use o limite certo (turnos vs horas)
+  // mesmo quando o turno 'Administrativo' não existe no DB.
+  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, lockedOffDates, weeks, effectiveCycleMonth, isAdm);
 
   // Persist
   const insertEntry = db.prepare(
@@ -1538,6 +1575,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       // Passo 4 (último recurso): ignora limite CLT semanal — todos os passos anteriores falharam.
       // Ocorre quando todos os workers atingiram o limite CLT semanal antes do fim da semana.
       // Seleciona o candidato com menor carga mensal para minimizar sobrecarga.
+      // Ainda respeita a restrição seg_sex em fins de semana — apenas dom_sab pode ser forçado aqui.
       if (!forced) {
         const byHours = [...candidates].sort(
           (a, b) =>
@@ -1545,6 +1583,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
             getEmployeeHours(db, b.emp.id, startDate, endDate)
         );
         for (const { folgaId, emp } of byHours) {
+          if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
           if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
           const shift = getShiftForEmp(emp);
           db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
@@ -1711,13 +1750,15 @@ function hasAdequateRest(allEntries, targetEntry, shift, shiftMap) {
 export function correctHours(
   entries, shiftTypes, shiftMap, currentHours, target,
   preferredShift = null, lockedOffDates = new Set(),
-  weeks = [], effectiveCycleMonth = null
+  weeks = [], effectiveCycleMonth = null, isAdmOverride = null
 ) {
   const diff = currentHours - target;
   if (Math.abs(diff) <= 6) return entries;
 
-  // Determina se o motorista é ADM ou NOTURNO com base no turno preferido
-  const isAdm     = preferredShift?.name === SHIFT_ADM_NAME;
+  // Determina se o motorista é ADM ou NOTURNO com base no turno preferido.
+  // isAdmOverride é passado pelo chamador quando o turno preferido não está disponível
+  // no DB (ex: shift 'Administrativo' não seedado) mas o setor do funcionário é ADM.
+  const isAdm     = isAdmOverride ?? (preferredShift?.name === SHIFT_ADM_NAME);
   const isNoturno = preferredShift?.name === SHIFT_NOTURNO_NAME;
 
   // Monta mapa semana → {weekStart, weekEnd, weekIndex, weekType, cltLimit}

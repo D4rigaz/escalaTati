@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getDb } from '../db/database.js';
-import { generateSchedule } from '../services/scheduleGenerator.js';
+import { generateSchedule, getSchedulePeriod } from '../services/scheduleGenerator.js';
 
 const router = Router();
 
@@ -44,9 +44,7 @@ router.get('/', (req, res) => {
   const db = getDb();
   const m = parseInt(month);
   const y = parseInt(year);
-  const daysInMonth = new Date(y, m, 0).getDate();
-  const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
-  const endDate = `${y}-${String(m).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+  const { startDate, endDate } = getSchedulePeriod(m, y);
 
   const entries = db
     .prepare(
@@ -172,9 +170,7 @@ router.delete('/month', (req, res) => {
   const db = getDb();
   const m = parseInt(month);
   const y = parseInt(year);
-  const daysInMonth = new Date(y, m, 0).getDate();
-  const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
-  const endDate = `${y}-${String(m).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+  const { startDate, endDate } = getSchedulePeriod(m, y);
 
   const result = db
     .prepare('DELETE FROM schedule_entries WHERE date >= ? AND date <= ?')

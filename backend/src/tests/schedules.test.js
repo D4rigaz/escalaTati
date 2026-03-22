@@ -64,11 +64,11 @@ describe('POST /api/schedules/generate', () => {
     expect(res.body.success).toBe(true);
     expect(Array.isArray(res.body.warnings)).toBe(true);
 
-    // Com 2 funcionários, deve gerar entradas para os 31 dias de janeiro
+    // Issue #112: período Jan/2025 = 05/01–01/02 (28 dias, primeira Dom→Sáb anterior ao próximo Dom)
     const schedule = await request(app).get('/api/schedules?month=1&year=2025');
     expect(schedule.body.entries.length).toBeGreaterThan(0);
     expect(schedule.body.entries.every((e) => e.employee_id != null)).toBe(true);
-    expect(schedule.body.entries.every((e) => e.date.startsWith('2025-01'))).toBe(true);
+    expect(schedule.body.entries.every((e) => e.date >= '2025-01-05' && e.date <= '2025-02-01')).toBe(true);
   });
 
   it('gera escala vazia quando não há funcionários', async () => {
@@ -244,10 +244,11 @@ describe('DELETE /api/schedules/month', () => {
     const emp = createEmployee(db, { name: 'Eduardo' });
     const sid = shiftId(db, 'Noturno');
 
+    // Issue #112: período Mai/2025 começa em 04/05 (primeiro domingo). Usar datas dentro do período.
     db.prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
-      .run(emp.id, sid, '2025-05-01');
+      .run(emp.id, sid, '2025-05-04');
     db.prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
-      .run(emp.id, sid, '2025-05-02');
+      .run(emp.id, sid, '2025-05-05');
 
     const res = await request(app).delete('/api/schedules/month?month=5&year=2025');
     expect(res.status).toBe(200);
