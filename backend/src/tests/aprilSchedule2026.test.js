@@ -13,8 +13,11 @@
  *   - 2 Ambulância   (cycle_start=Mar/2026) — dom_sab  [para suprir cobertura noturna]
  *   - 1 ADM          (cycle_start=Jan/2026) — seg_sex
  *
- * Abril 2026: começa na Quarta (Apr 1) → firstWeekIsPartial=true → cltWeekOffset=1
- * Fases:
+ * Abril 2026: começa na Quarta (Apr 1) → primeiro domingo = 05/04
+ * Período: 05/04/2026 → 02/05/2026 (4 semanas completas, 28 dias)
+ * Sem semana parcial — firstWeekIsPartial=false → cltWeekOffset=0
+ *
+ * Fases (com cltWeekOffset=0 a partir de 05/04):
  *   Amb1/Amb2 cycle=Jan/2026: elapsed=3 → fase 1 → [36h,42h,42h,36h]
  *   Hemo1/Hemo2 cycle=Fev/2026: elapsed=2 → fase 3 → [42h,36h,42h,42h]
  *   Amb3/Amb4 cycle=Mar/2026: elapsed=1 → fase 2 → [42h,42h,36h,42h]
@@ -23,15 +26,12 @@
  *   R1  — MIN_REST_HOURS ≥ 12h (CLT mínimo) entre turnos consecutivos por motorista
  *         NOTA: enforcement pode forçar cobertura com rest entre 12h e 24h.
  *         Violações enforcement aparecem em gen.warnings como segundo_motorista_forcado.
- *   R2  — MIN_DAILY_COVERAGE ≥ 2 motoristas/dia (todos os dias do mês)
- *         NOTA ESTRUTURAL: Apr10 (Sex) — todos os workers atingem limite CLT semanal
- *         na semana Apr5-Apr11. Enforcement não consegue forçar além do limite CLT.
+ *   R2  — MIN_DAILY_COVERAGE ≥ 2 motoristas/dia (todos os dias do período)
  *   R4  — Cobertura Noturna B: Seg/Qua/Sex ≥ 1 Ambulância com turno Noturno
- *         NOTA ESTRUTURAL: datas da semana parcial (Apr1-Apr4) são excluídas.
  *   R6  — ADM seg_sex não trabalha Sáb (dow=6) nem Dom (dow=0)
  *   R7  — Total mensal de cada motorista está entre 100h e 200h
  *   R8  — Máximo 6 dias consecutivos de trabalho por motorista
- *   R9  — Entries cobrem todos os 30 dias de Abril por motorista
+ *   R9  — Entries cobrem os 28 dias do período (05/04–02/05) por motorista
  *   R10 — Durações válidas: apenas 6h, 10h ou 12h por turno
  *
  * Regras NÃO validadas neste teste (requerem elenco maior):
@@ -50,11 +50,12 @@ import { freshDb } from './helpers.js';
 beforeEach(() => freshDb());
 
 // ── Constantes de Abril/2026 ──────────────────────────────────────────────────
+// Período: primeiro domingo (05/04) → sábado antes do primeiro domingo de maio (02/05)
 
 const APR2026 = { month: 4, year: 2026 };
-const APR_START = '2026-04-01';
-const APR_END = '2026-04-30';
-const APR_DAYS = 30;
+const APR_START = '2026-04-05';
+const APR_END   = '2026-05-02';
+const APR_DAYS  = 28; // 4 semanas completas
 
 // Dia da semana UTC (0=Dom, 1=Seg, ... 6=Sáb)
 function dow(dateStr) {
@@ -62,17 +63,12 @@ function dow(dateStr) {
 }
 
 const APR_DATES = Array.from({ length: APR_DAYS }, (_, i) => {
-  const d = new Date('2026-04-01T12:00:00Z');
+  const d = new Date('2026-04-05T12:00:00Z');
   d.setUTCDate(d.getUTCDate() + i);
   return d.toISOString().slice(0, 10);
 });
 
-// Semana parcial (Apr1–Apr4): excluída de R3/R4/R5 por limitação estrutural de cobertura.
-// Workers DIURNO na semana parcial são espaçados a cada 2 dias (fix #98A/#104B), portanto
-// não há Noturno disponível para Apr1-Apr4 sem violar rest CLT.
-const PARTIAL_WEEK_DATES = new Set(['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-04']);
-
-// Fix #107: Apr10 agora coberta pelo Passo 4 (clt_weekly_overflow) — sem exclusão necessária.
+// Sem semana parcial — todas as semanas são completas (Dom→Sáb).
 const R2_SKIP_DATES = new Set();
 
 // ── Helpers de criação via API ────────────────────────────────────────────────
@@ -143,7 +139,7 @@ function shiftEndMs(e) {
 describe('Abril/2026 — geração de escala com 7 motoristas', () => {
 
   // ── R9: 30 entries por motorista, 1 por dia ────────────────────────────────
-  it('R9 — cada motorista tem exatamente 30 entries cobrindo todos os dias de Abril', async () => {
+  it('R9 — cada motorista tem exatamente 28 entries cobrindo o período 05/04–02/05', async () => {
     const ids = await setupEmployees();
     await generateApril();
     const all = await fetchEntries();
@@ -154,7 +150,7 @@ describe('Abril/2026 — geração de escala com 7 motoristas', () => {
 
       expect(emp.length, `${label} total`).toBe(APR_DAYS);
       expect(new Set(dates).size, `${label} datas únicas`).toBe(APR_DAYS);
-      expect(dates.every((d) => d >= APR_START && d <= APR_END), `${label} dentro de Abril`).toBe(true);
+      expect(dates.every((d) => d >= APR_START && d <= APR_END), `${label} dentro do período 05/04–02/05`).toBe(true);
     }
   });
 
@@ -275,9 +271,8 @@ describe('Abril/2026 — geração de escala com 7 motoristas', () => {
 
   // ── R4: Cobertura Noturna B — Seg/Qua/Sex ≥ 1 Ambulância Noturno ─────────
   //
-  // NOTA ESTRUTURAL: datas Apr1–Apr4 (semana parcial) são excluídas desta verificação.
-  // Workers Ambulância na semana parcial usam posições espaçadas (fix #98A/#104B),
-  // não há Noturno disponível em Qua/Sex da semana parcial sem violar rest CLT mínimo.
+  // Período começa sempre no primeiro domingo → sem semana parcial.
+  // Todas as Seg/Qua/Sex do período são verificadas.
   it('R4 — Seg/Qua/Sex: ≥ 1 motorista Ambulância com turno Noturno por dia', async () => {
     const ids = await setupEmployees();
     await generateApril();
@@ -287,8 +282,6 @@ describe('Abril/2026 — geração de escala com 7 motoristas', () => {
     const sqfDays = APR_DATES.filter((d) => [1, 3, 5].includes(dow(d)));  // Seg/Qua/Sex
 
     for (const date of sqfDays) {
-      if (PARTIAL_WEEK_DATES.has(date)) continue; // semana parcial — ver nota acima
-
       const noturnos = all.filter(
         (e) => e.date === date && allAmbIds.has(e.employee_id) && !e.is_day_off && e.shift_name === 'Noturno'
       ).length;

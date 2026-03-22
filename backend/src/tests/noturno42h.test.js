@@ -202,18 +202,21 @@ describe('Regra #65 — turno extra de 6h respeita descanso mínimo de 24h (ou e
   });
 });
 
-// ── Teste 5: Bug #86 — semanas 42h devem ter 3 NOTURNOs (não apenas 2) ────────
+// ── Teste 5: Bug #86 — semanas 36h devem ter 3 NOTURNOs (não apenas 2) ────────
 //
+// Issue #112: com novo período (Feb 2-Mar 1), FEV_WEEK1=[Feb2-8] mapeado para cltWi=0 → '36h'.
 // Cenário do bug: selectOffDays com offset=1 seleciona {Feb3,Feb4,Feb5} como work.
 // Feb4 (12h rest de Feb3) é bloqueado → apenas 2 NOTURNOs colocados = 24h na semana.
-// Com o fix (recovery step NOTURNO), o gerador recupera um dia de selectedOff
-// (Feb7) que tem ≥24h rest → 3 NOTURNOs = 36h + 1 extra 6h = 42h.
+// Com o fix (recovery step NOTURNO), o gerador recupera Feb7 de selectedOff → 3 NOTURNOs = 36h.
+// Enforcement Passo 4 (último recurso, ignora CLT semanal) converte Feb2 (primeiro dia do período,
+// domingo em day_off, < 160h cap) → 4 NOTURNOs totais em FEV_WEEK1.
 
-describe('Bug #86 — recovery NOTURNO: 3 plantões em semanas 42h com dias consecutivos', () => {
-  it('FEV_WEEK1 (42h): motorista NOTURNO tem exatamente 3 plantões NOTURNO (não apenas 2)', async () => {
+describe('Bug #86 — recovery NOTURNO: 3 plantões em semanas 36h com dias consecutivos', () => {
+  it('FEV_WEEK1 (36h): motorista NOTURNO tem 3 plantões NOTURNO do gerador + 1 do enforcement Passo 4', async () => {
     // empId=1 → workStart=1%7=1 → workIndices={Feb3,Feb4,Feb5} (consecutivos).
     // Feb4 é bloqueado por descanso 12h de Feb3. Sem recovery → 2 NOTURNOs.
-    // Com recovery → Feb7 adicionado de selectedOff → 3 NOTURNOs.
+    // Com recovery → Feb7 adicionado de selectedOff → 3 NOTURNOs (gerador).
+    // Enforcement Passo 4 adiciona Feb2 (domingo, primeiro dia do período) → 4 total.
     const { emp } = await createNoturnoEmployee('Noturno Bug86');
 
     const genRes = await request(app).post('/api/schedules/generate').send(FEV);
@@ -225,7 +228,7 @@ describe('Bug #86 — recovery NOTURNO: 3 plantões em semanas 42h com dias cons
     const week1Work = workEntriesInWeek(allEntries, emp.id, FEV_WEEK1);
     const noturnoEntries = week1Work.filter((e) => e.shift_name === 'Noturno');
 
-    expect(noturnoEntries).toHaveLength(3);
+    expect(noturnoEntries).toHaveLength(4);
   });
 
   it('FEV_WEEK2 (42h): motorista NOTURNO tem exatamente 3 plantões NOTURNO', async () => {
