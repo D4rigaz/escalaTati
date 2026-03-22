@@ -5,6 +5,8 @@ import ExcelJS from 'exceljs';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+const DOW_ABBR = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
 function getMonthData(month, year) {
   const db = getDb();
   const daysInMonth = getDaysInMonth(new Date(year, month - 1, 1));
@@ -53,8 +55,11 @@ export async function exportExcel(month, year) {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
   });
 
-  // Header row: Employee name + days
-  const headerRow = ['Funcionário', 'Total (h)', ...dates.map((d) => d.slice(8))]; // day numbers
+  // Header row: Employee name + days (dia-da-semana + número, ex: "Seg\n06")
+  const headerRow = ['Funcionário', 'Total (h)', ...dates.map((d) => {
+    const dow = new Date(d + 'T12:00:00').getDay();
+    return `${DOW_ABBR[dow]}\n${d.slice(8)}`;
+  })];
   sheet.addRow(headerRow);
 
   const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E40AF' } };
@@ -62,13 +67,13 @@ export async function exportExcel(month, year) {
   sheet.getRow(1).eachCell((cell) => {
     cell.fill = headerFill;
     cell.font = headerFont;
-    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     cell.border = {
       top: { style: 'thin' }, left: { style: 'thin' },
       bottom: { style: 'thin' }, right: { style: 'thin' },
     };
   });
-  sheet.getRow(1).height = 22;
+  sheet.getRow(1).height = 30;
 
   // Freeze header
   sheet.views = [{ state: 'frozen', ySplit: 1, xSplit: 2 }];
@@ -164,7 +169,10 @@ export async function exportPdf(month, year) {
   doc.setFont('helvetica', 'normal');
   doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 20);
 
-  const head = [['Funcionário', 'Total (h)', ...dates.map((d) => d.slice(8))]];
+  const head = [['Funcionário', 'Total (h)', ...dates.map((d) => {
+    const dow = new Date(d + 'T12:00:00').getDay();
+    return `${DOW_ABBR[dow]}\n${d.slice(8)}`;
+  })]];
   const body = [];
   const cellStyles = [];
 

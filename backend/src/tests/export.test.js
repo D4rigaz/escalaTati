@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
+import ExcelJS from 'exceljs';
 import app from '../app.js';
 import { freshDb, createEmployee, shiftId } from './helpers.js';
 
@@ -120,6 +121,56 @@ describe('GET /api/export/excel', () => {
 
     const res = await request(app).get('/api/export/excel?month=1&year=2025');
     expect(res.status).toBe(200);
+  });
+
+  // ── Feature #122 — cabeçalho com dia da semana ──────────────────────────────
+
+  async function loadExcel(month, year) {
+    const res = await request(app)
+      .get(`/api/export/excel?month=${month}&year=${year}`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(res.body);
+    return workbook;
+  }
+
+  it('cabeçalho Excel col 3 = "Qua\\n01" (Jan/2025 dia 1 é Quarta-feira)', async () => {
+    // Jan 1, 2025 = Quarta-feira (dow=3 → DOW_ABBR[3]='Qua'), número do dia = '01'
+    const workbook = await loadExcel(1, 2025);
+    const row1 = workbook.worksheets[0].getRow(1);
+    expect(row1.getCell(1).value).toBe('Funcionário');
+    expect(row1.getCell(2).value).toBe('Total (h)');
+    expect(row1.getCell(3).value).toBe('Qua\n01');
+  });
+
+  it('cabeçalho Excel col 33 = "Sex\\n31" (Jan/2025 dia 31 é Sexta-feira)', async () => {
+    // Jan 31, 2025 = Sexta-feira (dow=5 → DOW_ABBR[5]='Sex'), número = '31'
+    const workbook = await loadExcel(1, 2025);
+    // col 1=Funcionário, col 2=Total (h), col 3=dia 1 … col 33=dia 31
+    expect(workbook.worksheets[0].getRow(1).getCell(33).value).toBe('Sex\n31');
+  });
+
+  it('cabeçalho Excel — wrapText habilitado nas colunas de dias', async () => {
+    const workbook = await loadExcel(1, 2025);
+    // Verificar wrapText em col 3 (primeiro dia)
+    expect(workbook.worksheets[0].getRow(1).getCell(3).alignment?.wrapText).toBe(true);
+  });
+
+  it('cabeçalho Excel — altura da linha de cabeçalho é 30', async () => {
+    const workbook = await loadExcel(1, 2025);
+    expect(workbook.worksheets[0].getRow(1).height).toBe(30);
+  });
+
+  it('cabeçalho Excel — Dom Jun 1, 2025 aparece como "Dom\\n01"', async () => {
+    // Jun 1, 2025 = Domingo (dow=0 → DOW_ABBR[0]='Dom')
+    const workbook = await loadExcel(6, 2025);
+    expect(workbook.worksheets[0].getRow(1).getCell(3).value).toBe('Dom\n01');
   });
 
   it('total de horas dentro do alvo — sem afetar o status da resposta', async () => {
