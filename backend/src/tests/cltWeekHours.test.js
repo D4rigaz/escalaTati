@@ -216,7 +216,7 @@ describe('Fase 2 — padrão [42h,42h,36h,42h]', () => {
   it('Ago/2025 (cycle_start=Jul/2025): semana cltWi=0 (Ago 3–9) → 42h com 1 turno de 6h', async () => {
     // Ago 1 = Sex → cltWeekOffset=1 → primeira semana completa = Ago 3–9 (cltWi=0)
     // Fase 2, cltWi=0 → '42h'
-    const empId = await createDiurnoWorker('DIURNO F2b 42h-w1', 7, 2025);
+    const empId = await createDiurnoWorker('DIURNO F2b 42h-cltWi=0', 7, 2025);
     const entries = await generateAndGetEntries(8, 2025);
 
     const week = entriesInRange(entries, empId, '2025-08-03', '2025-08-09');
@@ -233,7 +233,7 @@ describe('Fase 2 — padrão [42h,42h,36h,42h]', () => {
   it('Ago/2025 (cycle_start=Jul/2025): semana cltWi=2 (Ago 17–23) → 36h exatamente 3×12h', async () => {
     // Fase 2, cltWi=2 → '36h'
     // (semana cltWi=1 ignorada: Dom Ago 10 bloqueado por rest cross-week do Sáb Ago 9)
-    const empId = await createDiurnoWorker('DIURNO F2b 36h-w3', 7, 2025);
+    const empId = await createDiurnoWorker('DIURNO F2b 36h-cltWi=2', 7, 2025);
     const entries = await generateAndGetEntries(8, 2025);
 
     const week = entriesInRange(entries, empId, '2025-08-17', '2025-08-23');
@@ -353,7 +353,7 @@ describe('Lição bug #119 — preferred_shift_id Diurno explícito', () => {
     // Verificar via GET que o preferred_shift_id foi salvo corretamente
     const getRes = await request(app).get(`/api/employees/${empRes.body.id}`);
     expect(getRes.status).toBe(200);
-    expect(getRes.body.restRules?.preferred_shift_id, 'preferred_shift_id não-null').toBe(diurnoId);
+    expect(getRes.body.restRules?.preferred_shift_id, 'preferred_shift_id não-null').not.toBeNull();
     expect(getRes.body.restRules?.preferred_shift_id, 'preferred_shift_id é Diurno').toBe(diurnoId);
   });
 
