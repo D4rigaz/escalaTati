@@ -5,6 +5,8 @@ import ExcelJS from 'exceljs';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+const DOW_ABBR = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
 function getMonthData(month, year) {
   const db = getDb();
   const daysInMonth = getDaysInMonth(new Date(year, month - 1, 1));
@@ -52,8 +54,6 @@ export async function exportExcel(month, year) {
   const sheet = workbook.addWorksheet(`Escala ${monthName}`, {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
   });
-
-  const DOW_ABBR = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
   // Header row: Employee name + days (dia-da-semana + número, ex: "Seg\n06")
   const headerRow = ['Funcionário', 'Total (h)', ...dates.map((d) => {
@@ -169,10 +169,9 @@ export async function exportPdf(month, year) {
   doc.setFont('helvetica', 'normal');
   doc.text(`Gerado em: ${format(new Date(), 'dd/MM/yyyy HH:mm')}`, 14, 20);
 
-  const DOW_ABBR_PDF = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
   const head = [['Funcionário', 'Total (h)', ...dates.map((d) => {
     const dow = new Date(d + 'T12:00:00').getDay();
-    return `${DOW_ABBR_PDF[dow]}\n${d.slice(8)}`;
+    return `${DOW_ABBR[dow]}\n${d.slice(8)}`;
   })]];
   const body = [];
   const cellStyles = [];
