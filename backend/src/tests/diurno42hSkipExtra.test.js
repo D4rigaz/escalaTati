@@ -66,7 +66,15 @@ function weekHours(entries) {
   return entries.reduce((sum, e) => (e.is_day_off ? sum : sum + (e.duration_hours || 0)), 0);
 }
 
+async function getDiurnoShiftId() {
+  const res = await request(app).get('/api/shift-types');
+  return res.body.find((s) => s.name === 'Diurno')?.id;
+}
+
 async function createDiurnoEmployee(name, cycleStartMonth, cycleStartYear) {
+  // Fix #119: passa preferred_shift_id explícito para Diurno — null-preferred workers
+  // seguem o path Noturno/twelveHourShifts e não entram no isDiurno42h.
+  const preferredShiftId = await getDiurnoShiftId();
   const res = await request(app)
     .post('/api/employees')
     .send({
@@ -74,6 +82,7 @@ async function createDiurnoEmployee(name, cycleStartMonth, cycleStartYear) {
       setores: ['Transporte Ambulância'],
       cycle_start_month: cycleStartMonth,
       cycle_start_year: cycleStartYear,
+      restRules: { preferred_shift_id: preferredShiftId },
     });
   expect(res.status).toBe(201);
   return res.body.id;

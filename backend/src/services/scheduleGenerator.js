@@ -517,7 +517,12 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       const weekType = cltWi >= 0
         ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi)
         : '36h'; // semana parcial: sem meta CLT — sem turno extra 6h
-      const isDiurno42h = !isNoturno && weekType === '42h';
+      // Fix #119: null-preferred workers must NOT enter the Diurno42h path.
+      // The Diurno42h grid (positions 0,2,4,6) relies on fix #100's skippedAny to protect rest,
+      // but skippedAny aborts the extra 6h shift, yielding 36h instead of 42h.
+      // Workers with preferred_shift_id=null fall through to the else branch where
+      // natural emendado patterns (Noturno→Manhã etc.) correctly produce 42h.
+      const isDiurno42h = !isNoturno && weekType === '42h' && rules.preferred_shift_id !== null;
 
       if (isDiurno42h) {
         // Dias disponíveis da semana (não locked, não vacation)
@@ -780,8 +785,9 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
 
 
         // Issue #65: NOTURNO em semana 42h recebe 1 turno extra de 6h (Manhã ou Tarde).
+        // Fix #119: null-preferred workers também usam este path (twelveHourShifts + emendado).
         // DIURNO 42h usa caminho separado acima (isDiurno42h).
-        if (isNoturno && weekType === '42h') {
+        if ((isNoturno || rules.preferred_shift_id === null) && weekType === '42h') {
           const extraCandidates = [manhaShift, tardeShift].filter(Boolean);
           let extraAdded = false;
 
@@ -1410,9 +1416,12 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       if (s) { preferredShiftCache[emp.id] = s; return s; }
     }
     const isAdm = (employeeSectorsMap[emp.id] || []).includes(SETOR_ADM);
+    // Fix #119: null-preferred non-ADM workers use Noturno fallback in enforcement,
+    // consistent with the generator's twelveHourShifts path. Prevents Noturno→Diurno(0h rest).
+    const noturnoFallback = shiftTypes.find((s) => s.name === SHIFT_NOTURNO_NAME);
     const fallback = isAdm
       ? (shiftTypes.find((s) => s.name === SHIFT_ADM_NAME) || defaultShift)
-      : defaultShift;
+      : (noturnoFallback || defaultShift);
     preferredShiftCache[emp.id] = fallback;
     return fallback;
   };

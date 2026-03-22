@@ -45,7 +45,10 @@ const JAN2025 = { month: 1, year: 2025 };
 
 describe('Fix #94 — recovery virtual rest cross-semana', () => {
   it('semana 36h após isDiurno42h gera 36h (3 turnos 12h) mesmo quando Dom é bloqueado por rest=12h', async () => {
-    // Criar motorista DIURNO (Ambulância, cycle_start=Jan/2025 → fase 1)
+    // Criar motorista DIURNO explícito (Ambulância, cycle_start=Jan/2025 → fase 1)
+    // Fix #119: preferred_shift_id explícito para garantir path isDiurno42h.
+    const shiftsRes = await request(app).get('/api/shift-types');
+    const diurnoId = shiftsRes.body.find((s) => s.name === 'Diurno')?.id;
     const empRes = await request(app)
       .post('/api/employees')
       .send({
@@ -53,6 +56,7 @@ describe('Fix #94 — recovery virtual rest cross-semana', () => {
         setores: ['Transporte Ambulância'],
         cycle_start_month: 1,
         cycle_start_year: 2025,
+        restRules: { preferred_shift_id: diurnoId },
       });
     expect(empRes.status).toBe(201);
     const empId = empRes.body.id;

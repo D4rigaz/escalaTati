@@ -33,7 +33,10 @@ describe('Regra 1 — padrão de 12h', () => {
 describe('Regra 2 — proibido 24h consecutivas', () => {
   it('nunca gera entradas que totalizam 24h consecutivas para o mesmo funcionário', async () => {
     const db = freshDb();
-    createEmployee(db, { name: 'Bruno' });
+    // Fix #119: usar Noturno explícito para garantir consistência entre gerador e enforcement.
+    // Workers null-preferred no else branch (pós fix #119) podem receber Noturno pelo gerador
+    // e Diurno pelo enforcement Step 2, criando par Noturno→Diurno(0h rest) = 24h consecutivas.
+    createEmployee(db, { name: 'Bruno', preferredShiftId: shiftId(db, 'Noturno') });
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 

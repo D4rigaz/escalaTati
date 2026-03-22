@@ -16,6 +16,7 @@ export function createEmployee(db, {
   name = 'Teste',
   setor = 'Transporte Ambulância',
   setores,
+  preferredShiftId = null,
 } = {}) {
   const empSetores = setores
     ? setores.filter((s) => VALID_SETORES.includes(s))
@@ -33,8 +34,8 @@ export function createEmployee(db, {
   }
 
   db.prepare(
-    'INSERT INTO employee_rest_rules (employee_id, min_rest_hours) VALUES (?, 24)'
-  ).run(emp.id);
+    'INSERT INTO employee_rest_rules (employee_id, min_rest_hours, preferred_shift_id) VALUES (?, 24, ?)'
+  ).run(emp.id, preferredShiftId);
 
   return emp;
 }
