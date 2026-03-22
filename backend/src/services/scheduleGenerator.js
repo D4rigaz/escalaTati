@@ -171,6 +171,7 @@ function getWeekTypeFromPhase(phase, weekIndex) {
 // Configuração mínima de crew recomendada (decisão PO — issue #108)
 const MIN_HEMO_WORKERS   = 4; // para garantir R5: ≥2 Hemo Diurno em todos os dias úteis
 const MIN_AMB_NOTURNO    = 4; // para garantir R3: ≥2 Noturno Amb em Qui/Sáb
+const MIN_DOM_SAB_WORKERS = 4; // para garantir MIN_DAILY_COVERAGE/dia incl. fins de semana (issue #115)
 
 /**
  * Verifica se o elenco ativo atende à configuração mínima recomendada.
@@ -206,6 +207,17 @@ function checkCrewMinimum(db, shiftTypes) {
     crew_warnings.push({
       type: 'crew_amb_noturno_insuficiente',
       message: `Cobertura Noturno Ambulância pode ser insuficiente: ${ambNoturnoCount}/${MIN_AMB_NOTURNO} workers com turno Noturno preferido (mínimo recomendado para garantir ≥2 em Qui/Sáb)`,
+    });
+  }
+
+  const domSabCount = db.prepare(
+    `SELECT COUNT(*) as c FROM employees WHERE active = 1 AND work_schedule != 'seg_sex'`
+  ).get().c;
+
+  if (domSabCount < MIN_DOM_SAB_WORKERS) {
+    crew_warnings.push({
+      type: 'crew_dom_sab_insuficiente',
+      message: `Cobertura diária geral pode ser insuficiente: ${domSabCount}/${MIN_DOM_SAB_WORKERS} workers dom_sab ativos (mínimo recomendado para garantir ≥${MIN_DAILY_COVERAGE}/dia incluindo fins de semana)`,
     });
   }
 

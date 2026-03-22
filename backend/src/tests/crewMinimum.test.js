@@ -82,15 +82,15 @@ describe('crew_warnings — configuração mínima de crew', () => {
     expect(ambWarn.message).toContain('2/4');
   });
 
-  it('emite ambos os warnings quando elenco está completamente abaixo do mínimo', async () => {
+  it('emite todos os warnings quando elenco está completamente abaixo do mínimo', async () => {
     await createWorker('Hemo 1', 'Transporte Hemodiálise', SHIFT_DIURNO_ID);
     await createWorker('Amb 1', 'Transporte Ambulância', SHIFT_NOTURNO_ID);
 
     const result = await generate();
-    expect(result.crew_warnings).toHaveLength(2);
     const types = result.crew_warnings.map(w => w.type);
     expect(types).toContain('crew_hemo_insuficiente');
     expect(types).toContain('crew_amb_noturno_insuficiente');
+    expect(types).toContain('crew_dom_sab_insuficiente');
   });
 
   it('crew_warnings nao bloqueia a geracao — success=true mesmo com warnings', async () => {
@@ -101,5 +101,66 @@ describe('crew_warnings — configuração mínima de crew', () => {
     const result = await generate();
     expect(result.success).toBe(true);
     expect(result.crew_warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe('crew_warnings — cobertura diária geral (dom_sab)', () => {
+  it('nao emite crew_dom_sab_insuficiente quando há 4 ou mais workers dom_sab', async () => {
+    for (let i = 1; i <= 4; i++) {
+      await createWorker(`Hemo ${i}`, 'Transporte Hemodiálise', SHIFT_DIURNO_ID);
+    }
+
+    const result = await generate();
+    const types = result.crew_warnings.map(w => w.type);
+    expect(types).not.toContain('crew_dom_sab_insuficiente');
+  });
+
+  it('emite crew_dom_sab_insuficiente quando há menos de 4 workers dom_sab', async () => {
+    await createWorker('Hemo 1', 'Transporte Hemodiálise', SHIFT_DIURNO_ID);
+    await createWorker('Hemo 2', 'Transporte Hemodiálise', SHIFT_DIURNO_ID);
+
+    const result = await generate();
+    const warn = result.crew_warnings.find(w => w.type === 'crew_dom_sab_insuficiente');
+    expect(warn).toBeDefined();
+    expect(warn.message).toContain('2/4');
+  });
+
+  it('workers seg_sex nao contam para o minimo dom_sab', async () => {
+    // 3 dom_sab + 2 seg_sex = total 5 ativos, mas dom_sab=3 < 4
+    for (let i = 1; i <= 3; i++) {
+      await createWorker(`Hemo ${i}`, 'Transporte Hemodiálise', SHIFT_DIURNO_ID);
+    }
+    const body = {
+      name: 'Adm 1',
+      setores: ['Transporte Administrativo'],
+      cycle_start_month: 1,
+      cycle_start_year: 2026,
+      work_schedule: 'seg_sex',
+    };
+    await request(app).post('/api/employees').send(body).expect(201);
+    await request(app).post('/api/employees').send({ ...body, name: 'Adm 2' }).expect(201);
+
+    const result = await generate();
+    const warn = result.crew_warnings.find(w => w.type === 'crew_dom_sab_insuficiente');
+    expect(warn).toBeDefined();
+    expect(warn.message).toContain('3/4');
+  });
+
+  it('nao emite crew_dom_sab_insuficiente com exatamente 4 workers dom_sab e alguns seg_sex', async () => {
+    for (let i = 1; i <= 4; i++) {
+      await createWorker(`Hemo ${i}`, 'Transporte Hemodiálise', SHIFT_DIURNO_ID);
+    }
+    const body = {
+      name: 'Adm 1',
+      setores: ['Transporte Administrativo'],
+      cycle_start_month: 1,
+      cycle_start_year: 2026,
+      work_schedule: 'seg_sex',
+    };
+    await request(app).post('/api/employees').send(body).expect(201);
+
+    const result = await generate();
+    const types = result.crew_warnings.map(w => w.type);
+    expect(types).not.toContain('crew_dom_sab_insuficiente');
   });
 });
