@@ -12,9 +12,9 @@
  *   - Geração bem-sucedida: success=true, sem warnings críticos (sem_motorista),
  *     sem crew_warnings (elenco mínimo atendido)
  *   - Regra 19/42: cobertura diária ≥ MIN_DAILY_COVERAGE (2) em todos os dias
- *   - Regra 4: descanso ≥ 12h entre turnos consecutivos por motorista
- *     (threshold ≥12h para acomodar pares emendados intra-dia; o gerador
- *     garante os 24h pós-bloco emendado)
+ *   - Regra 4: descanso ≥24h entre turnos consecutivos por motorista,
+ *     exceto pares emendados (Noturno→Manhã, Manhã→Tarde, Tarde→Noturno)
+ *     detectados pelo nome do turno + encaixe imediato (restMs ≤ 0)
  *   - Regra #30: máx 6 dias de trabalho consecutivos por motorista
  *   - Regra 12: workers seg_sex não trabalham aos Sábados ou Domingos
  *   - Durações válidas: apenas 6h, 10h ou 12h por turno trabalhado
