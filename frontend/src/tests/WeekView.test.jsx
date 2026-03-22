@@ -186,10 +186,13 @@ describe('WeekView — renderização base', () => {
 
 describe('WeekView — cabeçalho de dias (issue #73)', () => {
   it('exibe todos os 7 labels de dias da semana no cabeçalho', () => {
-    // Março 2026 começa no domingo — todos os 7 labels aparecem ao menos uma vez.
+    // Fornece uma entry por dia da semana (Mar 1 Dom … Mar 7 Sáb) para que todos
+    // os 7 labels apareçam — o componente deriva colunas diretamente das entries.
+    const dates = ['2026-03-01','2026-03-02','2026-03-03','2026-03-04','2026-03-05','2026-03-06','2026-03-07'];
+    const entries = dates.map((date, i) => makeEntry({ id: i + 1, date }));
     render(
       <WeekView
-        scheduleData={makeScheduleData([makeEntry()])}
+        scheduleData={makeScheduleData(entries)}
         currentMonth={MONTH}
         currentYear={YEAR}
       />
