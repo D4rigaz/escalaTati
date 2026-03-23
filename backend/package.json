@@ -7,7 +7,9 @@
     "dev": "node --watch --no-warnings=ExperimentalWarning src/index.js",
     "start": "node --no-warnings=ExperimentalWarning src/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:reset": "node --no-warnings=ExperimentalWarning src/db/reset.js",
+    "db:seed": "node --no-warnings=ExperimentalWarning src/db/seed.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
