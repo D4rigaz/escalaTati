@@ -125,10 +125,11 @@ describe('Abril/2026 — período 05/04 a 02/05 sem semana parcial', () => {
     }
   });
 
-  // Fase CLT — cycle_start=Fev/2025 em Abr/2026:
-  //   elapsed=(2026*12+4)-(2025*12+2)=14 -> phase=((14%3)+3)%3+1=3
-  //   getWeekTypeFromPhase(3, wi): wi=0→42h, wi=1→36h, wi=2→42h, wi=3→42h
-  it('semana cltWi=0 (05-11/Abr) recebe 42h NOTURNO (3×12h + 1×6h)', async () => {
+  // Fase CLT — cycle_start=Fev/2025 em Abr/2026 (fix #127 — índice global):
+  //   cycleFirstSunday=2025-02-02
+  //   Abr 05-11 (2026-04-05): globalWeekIdx=61, 61%12=1 → GLOBAL_PATTERN_12[1]='42h'
+  //   Abr 12-18 (2026-04-12): globalWeekIdx=62, 62%12=2 → GLOBAL_PATTERN_12[2]='42h'
+  it('semana (05-11/Abr) recebe 42h NOTURNO (3×12h + 1×6h)', async () => {
     const emp = await createNoturnoEmployee('Noturno Abr CLT', 2, 2025);
     await request(app).post('/api/schedules/generate').send({ month: 4, year: 2026 });
     const schedRes = await request(app).get('/api/schedules?month=4&year=2026');
@@ -140,16 +141,19 @@ describe('Abril/2026 — período 05/04 a 02/05 sem semana parcial', () => {
     expect(week1Hours).toBe(42);
   });
 
-  it('semana cltWi=1 (12-18/Abr) recebe 36h (sem turno 6h)', async () => {
-    const emp = await createNoturnoEmployee('Noturno Abr CLT36', 2, 2025);
+  it('semana (12-18/Abr) recebe 42h com índice global (fix #127)', async () => {
+    // Fix #127: cycle_start=Fev/2025 — cycleFirstSunday=2025-02-02.
+    // Abr 12-18 (2026-04-12): globalWeekIdx=62, 62%12=2 → GLOBAL_PATTERN_12[2]='42h'.
+    // 42h NOTURNO = 3×12h + 1×6h → a semana CONTÉM o turno de 6h.
+    const emp = await createNoturnoEmployee('Noturno Abr CLT42', 2, 2025);
     await request(app).post('/api/schedules/generate').send({ month: 4, year: 2026 });
     const schedRes = await request(app).get('/api/schedules?month=4&year=2026');
     const entries = schedRes.body.entries.filter((e) => e.employee_id === emp.id);
     const week2Dates = ['2026-04-12','2026-04-13','2026-04-14','2026-04-15','2026-04-16','2026-04-17','2026-04-18'];
     const week2Entries = entries.filter((e) => week2Dates.includes(e.date) && !e.is_day_off);
     const week2Hours = week2Entries.reduce((s, e) => s + (e.duration_hours || 0), 0);
-    expect(week2Hours).toBe(36);
-    expect(week2Entries.some((e) => e.duration_hours === 6)).toBe(false);
+    expect(week2Hours).toBe(42);
+    expect(week2Entries.some((e) => e.duration_hours === 6)).toBe(true);
   });
 });
 
