@@ -302,3 +302,140 @@ describe('WeekView — coluna de total (issue #73)', () => {
     expect(screen.getByText('12h', { selector: 'td' })).toHaveClass('text-orange-600');
   });
 });
+
+// ── Validação Motorista Alex — Semana 0 Abril/2026 (bug #135/#136) ────────────
+// Dados de referência gerados pelo backend (validados pelo PO em 2026-03-23):
+//   Semana 0 (05/04–11/04): Dom Manhã(6h), Ter Diurno(12h), Qui Diurno(12h), Sex Noturno(12h)
+//   Semanas 0 e 1 = 42h cada (weekType='42h' — GLOBAL_PATTERN_12)
+
+const ALEX_ID = 102;
+const APR = 4;
+const APR_YEAR = 2026;
+
+// Semana 0 de Abril/2026 exatamente como o backend gera
+const alexWeek0Entries = [
+  { id: 1001, employee_id: ALEX_ID, employee_name: 'Alex', employee_color: '#6B7280',
+    date: '2026-04-05', is_day_off: 0, is_locked: 0,
+    shift_name: 'Manhã', shift_color: '#FCD34D', start_time: '07:00', end_time: '13:00',
+    duration_hours: 6, setor_override: null, notes: null },
+  { id: 1002, employee_id: ALEX_ID, employee_name: 'Alex', employee_color: '#6B7280',
+    date: '2026-04-06', is_day_off: 1, is_locked: 0,
+    shift_name: null, shift_color: null, start_time: null, end_time: null,
+    duration_hours: null, setor_override: null, notes: null },
+  { id: 1003, employee_id: ALEX_ID, employee_name: 'Alex', employee_color: '#6B7280',
+    date: '2026-04-07', is_day_off: 0, is_locked: 0,
+    shift_name: 'Diurno', shift_color: '#93C5FD', start_time: '07:00', end_time: '19:00',
+    duration_hours: 12, setor_override: null, notes: null },
+  { id: 1004, employee_id: ALEX_ID, employee_name: 'Alex', employee_color: '#6B7280',
+    date: '2026-04-08', is_day_off: 1, is_locked: 0,
+    shift_name: null, shift_color: null, start_time: null, end_time: null,
+    duration_hours: null, setor_override: null, notes: null },
+  { id: 1005, employee_id: ALEX_ID, employee_name: 'Alex', employee_color: '#6B7280',
+    date: '2026-04-09', is_day_off: 0, is_locked: 0,
+    shift_name: 'Diurno', shift_color: '#93C5FD', start_time: '07:00', end_time: '19:00',
+    duration_hours: 12, setor_override: null, notes: null },
+  { id: 1006, employee_id: ALEX_ID, employee_name: 'Alex', employee_color: '#6B7280',
+    date: '2026-04-10', is_day_off: 0, is_locked: 0,
+    shift_name: 'Noturno', shift_color: '#818CF8', start_time: '19:00', end_time: '07:00',
+    duration_hours: 12, setor_override: null, notes: null },
+  { id: 1007, employee_id: ALEX_ID, employee_name: 'Alex', employee_color: '#6B7280',
+    date: '2026-04-11', is_day_off: 1, is_locked: 0,
+    shift_name: null, shift_color: null, start_time: null, end_time: null,
+    duration_hours: null, setor_override: null, notes: null },
+];
+
+describe('WeekView — Alex Semana 0 Abril/2026 (validação bug #135/#136)', () => {
+  it('05/04/2026 exibe label "Dom" — não "Seg" (regressão bug #135)', () => {
+    render(
+      <WeekView
+        scheduleData={makeScheduleData(alexWeek0Entries)}
+        currentMonth={APR}
+        currentYear={APR_YEAR}
+      />
+    );
+    // Obtém todos os th do cabeçalho com texto "Dom"
+    const domHeaders = screen.getAllByText('Dom');
+    expect(domHeaders.length).toBeGreaterThan(0);
+
+    // Verifica que o número "5" aparece no cabeçalho logo abaixo de "Dom"
+    // Os th têm estrutura: <div>Dom</div><div>5</div>
+    const header5 = screen.getByText('5', { selector: 'div' });
+    expect(header5).toBeInTheDocument();
+    // O pai do "5" deve conter "Dom" como sibling
+    const headerCell = header5.parentElement;
+    expect(headerCell.textContent).toContain('Dom');
+    expect(headerCell.textContent).toContain('5');
+  });
+
+  it('06/04/2026 exibe label "Seg" — não "Dom" (regressão bug #135)', () => {
+    render(
+      <WeekView
+        scheduleData={makeScheduleData(alexWeek0Entries)}
+        currentMonth={APR}
+        currentYear={APR_YEAR}
+      />
+    );
+    const header6 = screen.getByText('6', { selector: 'div' });
+    const headerCell = header6.parentElement;
+    expect(headerCell.textContent).toContain('Seg');
+    expect(headerCell.textContent).not.toContain('Dom');
+  });
+
+  it('05/04 exibe turno Manhã (6h) — não FOLGA', () => {
+    render(
+      <WeekView
+        scheduleData={makeScheduleData(alexWeek0Entries)}
+        currentMonth={APR}
+        currentYear={APR_YEAR}
+      />
+    );
+    // Inicial 'M' de Manhã deve estar presente
+    expect(screen.getByText('M')).toBeInTheDocument();
+    // Label 6h deve estar presente (turno extra)
+    expect(screen.getByText('6h', { selector: 'span' })).toBeInTheDocument();
+  });
+
+  it('total mensal de Alex exibe 42h (semana 0 completa) — não 36h (regressão bug #136)', () => {
+    render(
+      <WeekView
+        scheduleData={makeScheduleData(alexWeek0Entries)}
+        currentMonth={APR}
+        currentYear={APR_YEAR}
+      />
+    );
+    // 6 + 12 + 12 + 12 = 42h na coluna Total
+    expect(screen.getByText('42h', { selector: 'td' })).toBeInTheDocument();
+  });
+
+  it('total de 42h tem classe text-orange-600 (42h < 160h target)', () => {
+    render(
+      <WeekView
+        scheduleData={makeScheduleData(alexWeek0Entries)}
+        currentMonth={APR}
+        currentYear={APR_YEAR}
+      />
+    );
+    // 42h < 148h (160-12), fora da tolerância — exibe laranja para semana isolada
+    const totalCell = screen.getByText('42h', { selector: 'td' });
+    expect(totalCell).toHaveClass('text-orange-600');
+  });
+
+  it('sequência de DOW da semana está na ordem Dom→Sáb', () => {
+    render(
+      <WeekView
+        scheduleData={makeScheduleData(alexWeek0Entries)}
+        currentMonth={APR}
+        currentYear={APR_YEAR}
+      />
+    );
+    const expectedDow = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    const expectedNums = ['5', '6', '7', '8', '9', '10', '11'];
+
+    // Verifica que cada número de dia tem o DOW correto no mesmo th
+    for (let i = 0; i < 7; i++) {
+      const numEl = screen.getByText(expectedNums[i], { selector: 'div' });
+      const cell = numEl.parentElement;
+      expect(cell.textContent).toContain(expectedDow[i]);
+    }
+  });
+});
