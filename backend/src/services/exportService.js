@@ -55,10 +55,10 @@ export async function exportExcel(month, year) {
     pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1 },
   });
 
-  // Header row: Employee name + days (dia-da-semana + número, ex: "Seg\n06")
+  // Header row: Employee name + days (número + dia-da-semana, ex: "06\nSeg")
   const headerRow = ['Funcionário', 'Total (h)', ...dates.map((d) => {
     const dow = new Date(d + 'T12:00:00').getDay();
-    return `${DOW_ABBR[dow]}\n${d.slice(8)}`;
+    return `${d.slice(8)}\n${DOW_ABBR[dow]}`;
   })];
   sheet.addRow(headerRow);
 
@@ -171,7 +171,7 @@ export async function exportPdf(month, year) {
 
   const head = [['Funcionário', 'Total (h)', ...dates.map((d) => {
     const dow = new Date(d + 'T12:00:00').getDay();
-    return `${DOW_ABBR[dow]}\n${d.slice(8)}`;
+    return `${d.slice(8)}\n${DOW_ABBR[dow]}`;
   })]];
   const body = [];
   const cellStyles = [];

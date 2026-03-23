@@ -140,20 +140,20 @@ describe('GET /api/export/excel', () => {
     return workbook;
   }
 
-  it('cabeçalho Excel col 3 = "Qua\\n01" (Jan/2025 dia 1 é Quarta-feira)', async () => {
+  it('cabeçalho Excel col 3 = "01\\nQua" (Jan/2025 dia 1 é Quarta-feira)', async () => {
     // Jan 1, 2025 = Quarta-feira (dow=3 → DOW_ABBR[3]='Qua'), número do dia = '01'
     const workbook = await loadExcel(1, 2025);
     const row1 = workbook.worksheets[0].getRow(1);
     expect(row1.getCell(1).value).toBe('Funcionário');
     expect(row1.getCell(2).value).toBe('Total (h)');
-    expect(row1.getCell(3).value).toBe('Qua\n01');
+    expect(row1.getCell(3).value).toBe('01\nQua');
   });
 
-  it('cabeçalho Excel col 33 = "Sex\\n31" (Jan/2025 dia 31 é Sexta-feira)', async () => {
+  it('cabeçalho Excel col 33 = "31\\nSex" (Jan/2025 dia 31 é Sexta-feira)', async () => {
     // Jan 31, 2025 = Sexta-feira (dow=5 → DOW_ABBR[5]='Sex'), número = '31'
     const workbook = await loadExcel(1, 2025);
     // col 1=Funcionário, col 2=Total (h), col 3=dia 1 … col 33=dia 31
-    expect(workbook.worksheets[0].getRow(1).getCell(33).value).toBe('Sex\n31');
+    expect(workbook.worksheets[0].getRow(1).getCell(33).value).toBe('31\nSex');
   });
 
   it('cabeçalho Excel — wrapText habilitado nas colunas de dias', async () => {
@@ -167,10 +167,10 @@ describe('GET /api/export/excel', () => {
     expect(workbook.worksheets[0].getRow(1).height).toBe(30);
   });
 
-  it('cabeçalho Excel — Dom Jun 1, 2025 aparece como "Dom\\n01"', async () => {
+  it('cabeçalho Excel — Dom Jun 1, 2025 aparece como "01\\nDom"', async () => {
     // Jun 1, 2025 = Domingo (dow=0 → DOW_ABBR[0]='Dom')
     const workbook = await loadExcel(6, 2025);
-    expect(workbook.worksheets[0].getRow(1).getCell(3).value).toBe('Dom\n01');
+    expect(workbook.worksheets[0].getRow(1).getCell(3).value).toBe('01\nDom');
   });
 
   it('total de horas dentro do alvo — sem afetar o status da resposta', async () => {
