@@ -488,7 +488,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       // Fix #127: usar índice global baseado no cycle_start do funcionário
       const weekTypeAdm = cltWi >= 0
         ? getWeekTypeGlobal(
-            employee.cycle_start_year ?? new Date().getFullYear(),
+            employee.cycle_start_year ?? genYear,
             employee.cycle_start_month ?? 1,
             week[0]
           )
@@ -577,7 +577,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       // Fix #127: usar índice global baseado no cycle_start do funcionário
       const weekType = cltWi >= 0
         ? getWeekTypeGlobal(
-            employee.cycle_start_year ?? new Date().getFullYear(),
+            employee.cycle_start_year ?? genYear,
             employee.cycle_start_month ?? 1,
             week[0]
           )
@@ -909,7 +909,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   const corrected = correctHours(
     entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS,
     preferredShift, lockedOffDates, weeks,
-    employee.cycle_start_year ?? new Date().getFullYear(), isAdm,
+    employee.cycle_start_year ?? genYear, isAdm,
     employee.cycle_start_month ?? 1
   );
 
@@ -946,7 +946,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       weekIndex: wi,
       type: cltWi >= 0
         ? getWeekTypeGlobal(
-            employee.cycle_start_year ?? new Date().getFullYear(),
+            employee.cycle_start_year ?? genYear,
             employee.cycle_start_month ?? 1,
             week[0]
           )
