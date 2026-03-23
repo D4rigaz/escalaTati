@@ -127,12 +127,13 @@ describe('Cenário A — Não-ADM: cycle_start não afeta plantões físicos', (
 //   FEV_WEEK1 tem mais ou igual plantões que FEV_WEEK2 (ambas 42h).
 
 describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por semana', () => {
-  it('ADM cycle_start=Dez/2024 (phase 3): FEV_WEEK1 (cltWi=0=42h) tem 4 plantões; FEV_WEEK2 (cltWi=1=36h) tem 3 plantões; enforcement respeitou o limite CLT', async () => {
-    // cycle_start=Dez/2024 → phase 3 → padrão=['42h','36h','42h','42h']
-    // Com cltWeekOffset=1 (Fev começa Sáb):
-    //   FEV_WEEK1 (wi=1, cltWi=0): '42h' → limite 4 turnos ADM
-    //   FEV_WEEK2 (wi=2, cltWi=1): '36h' → limite 3 turnos ADM
-    // Total gerado = 160h → correctHours não altera. Enforcement cap atingido.
+  it('ADM cycle_start=Dez/2024 (fix #127 — global week index): FEV_WEEK1 (globalWi=9 → 36h) tem 3 plantões; FEV_WEEK2 (globalWi=10 → 42h) tem 4 plantões', async () => {
+    // Fix #127: índice global de semanas desde cycleFirstSunday (Dez/2024 = 2024-12-01).
+    // cycleFirstSunday = 2024-12-01 (domingo).
+    // GLOBAL_PATTERN_12 = ['36h','42h','42h','36h','42h','42h','36h','42h','42h','36h','42h','42h']
+    //   FEV_WEEK1 (2025-02-02): globalWi=9  → GLOBAL_PATTERN_12[9]='36h' → limite 3 turnos ADM
+    //   FEV_WEEK2 (2025-02-09): globalWi=10 → GLOBAL_PATTERN_12[10]='42h' → limite 4 turnos ADM
+    // O índice local (cltWi) é substituído pelo global para evitar drift em meses com 5 semanas.
     const empRes = await request(app)
       .post('/api/employees')
       .send({ name: 'ADM Phase3', setores: ['Transporte Administrativo'], cycle_start_month: 12, cycle_start_year: 2024 });
@@ -145,10 +146,10 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
     const entries = schedRes.body.entries;
     const empId = empRes.body.id;
 
-    // Semana 1 (cltWi=0 → 42h label → limite 4 turnos ADM): exatamente 4 plantões
-    expect(workIn(entries, empId, FEV_WEEK1)).toBe(4);
-    // Semana 2 (cltWi=1 → 36h label → limite 3 turnos ADM): exatamente 3 plantões — enforcement respeitou o limite
-    expect(workIn(entries, empId, FEV_WEEK2)).toBe(3);
+    // Semana 1 (globalWi=9 → '36h' → limite 3 turnos ADM): exatamente 3 plantões
+    expect(workIn(entries, empId, FEV_WEEK1)).toBe(3);
+    // Semana 2 (globalWi=10 → '42h' → limite 4 turnos ADM): exatamente 4 plantões — enforcement respeitou o limite
+    expect(workIn(entries, empId, FEV_WEEK2)).toBe(4);
   });
 
   it('ADM cycle_start=Jan/2025 (phase 2): semana 3 de Fev/2025 tem label 36h (FEV_WEEK3, cltWi=2) → exatamente 3 plantões; semana 1 (42h) tem mais plantões que semana 3 (36h)', async () => {
@@ -189,18 +190,11 @@ describe('Cenário B — ADM: label CLT (36h/42h) afeta número de turnos por se
 //   - Total de horas dentro de ±12h do alvo de 160h
 
 describe('Cenário C — seg_sex + cycle_start: interação não testada', () => {
-  it('ADM seg_sex cycle_start=Dez/2024 (phase 3) em Fev/2025: no máximo 1 plantão em Domingo e horas dentro de ±12h do alvo', async () => {
-    // Com a distribuição de folgas por employee.id (fix #55), a semana 1 aloca
-    // plantões em Seg–Qua em vez de Seg–Sex do código anterior. Isso muda quais
-    // dias livres têm descanso adequado para correctHours, que neste cenário
-    // mono-motorista não consegue converter nenhuma folga → total gerado = 148h.
-    //
-    // Enforcement:
-    //   Passo 3 força Feb 1 (Sáb): +10h → 158h
-    //   Passo 3 força Feb 2 (Dom): +10h → 168h → cap atingido
-    //   Domingos subsequentes (Feb 9, 16, 23) permanecem protegidos pelo cap.
-    //
-    // Resultado: exatamente 1 Domingo forçado por emergência de cobertura mono-motorista.
+  it('ADM seg_sex cycle_start=Dez/2024 (fix #127) em Fev/2025: nenhum plantão em Domingo (horas atingem cap antes) e horas dentro de ±40h do alvo', async () => {
+    // Fix #127: com índice global, FEV_WEEK1 (globalWi=9 → '36h') e FEV_WEEK2 (globalWi=10 → '42h').
+    // A distribuição de horas muda vs comportamento anterior: a semana 1 agora gera menos horas (36h),
+    // então correctHours alcança o cap já no Sábado (Feb 1) sem precisar forçar o Domingo (Feb 2).
+    // Resultado: 0 Domingos forçados (cap atingido antes).
     const empRes = await request(app)
       .post('/api/employees')
       .send({
@@ -219,14 +213,12 @@ describe('Cenário C — seg_sex + cycle_start: interação não testada', () =>
     const schedRes = await request(app).get(`/api/schedules?month=${FEV.month}&year=${FEV.year}`);
     const empEntries = schedRes.body.entries.filter((e) => e.employee_id === empRes.body.id);
 
-    // Em cenário mono-motorista seg_sex: Passo 3 (emergência, cap restaurado) força exatamente
-    // 1 Domingo (o primeiro do mês) antes de atingir o cap. Os demais Domingos ficam protegidos
-    // pelo cap (Passo 3 ainda o mantém). Domingos subsequentes não são forçados.
+    // Fix #127: cap atingido antes de forçar qualquer Domingo — nenhum Domingo trabalhado.
     const sundayWork = empEntries.filter((e) => {
       if (e.is_day_off) return false;
       return new Date(e.date + 'T12:00:00').getDay() === 0;
     });
-    expect(sundayWork).toHaveLength(1);
+    expect(sundayWork).toHaveLength(0);
 
     // fix #103: cap removido de Passo 2 → Passo 2 pode forçar trabalhador seg_sex em
     // dias úteis (Ter/Qui) quando ele está de folga por rest — desvio maior que ±12h.
@@ -269,11 +261,15 @@ describe('Cenário C — seg_sex + cycle_start: interação não testada', () =>
 // ── Cenário D1 ────────────────────────────────────────────────────────────────
 // Labels distintas: dois motoristas ADM com cycle_start diferentes no mesmo mês.
 //
-// Fix #103: cltWeekOffset=1 (Fev começa Sáb) — índices CLT ajustados corretamente.
-// Fev/2025 (firstWeekIsPartial=true, cltWeekOffset=1):
-//   FEV_WEEK1 (wi=1, cltWi=0): phase2='42h', phase3='42h' — ambas iguais
-//   FEV_WEEK2 (wi=2, cltWi=1): phase2='42h', phase3='36h' — diferem
-//   FEV_WEEK3 (wi=3, cltWi=2): phase2='36h', phase3='42h' — diferem (invertidas)
+// Fix #127: índice global de semanas (getWeekTypeGlobal) — tipos por semana em Fev/2025:
+//   cycle_start=Jan/2025 (cycleFirstSunday=2025-01-05):
+//     FEV_WEEK1 (2025-02-02): globalWi=4  → '42h'
+//     FEV_WEEK2 (2025-02-09): globalWi=5  → '42h'
+//     FEV_WEEK3 (2025-02-16): globalWi=6  → '36h'
+//   cycle_start=Dez/2024 (cycleFirstSunday=2024-12-01):
+//     FEV_WEEK1 (2025-02-02): globalWi=9  → '36h'
+//     FEV_WEEK2 (2025-02-09): globalWi=10 → '42h'
+//     FEV_WEEK3 (2025-02-16): globalWi=11 → '42h'
 //
 // Em cenários ADM com restrições de descanso (10h turno → 14h rest < 24h mínimo),
 // a contagem bruta por semana pode não refletir o label CLT quando o limite
@@ -306,19 +302,18 @@ describe('Cenário D1 — labels: weekClassifications distintas entre cycle_star
     expect(emp1Entries.length).toBe(28);
     expect(emp2Entries.length).toBe(28);
 
-    // FEV_WEEK1 (cltWi=0): ambas as fases têm '42h' → limite 4 turnos ADM
-    // Em cenários ADM com rest < 24h entre turnos consecutivos, o gerador
-    // pode colocar no máximo 4 turnos não-consecutivos em 7 dias.
-    expect(workIn(entries, emp1Res.body.id, FEV_WEEK1)).toBeGreaterThanOrEqual(3);
-    expect(workIn(entries, emp2Res.body.id, FEV_WEEK1)).toBeGreaterThanOrEqual(3);
+    // Fix #127: tipos de semana com índice global:
+    // FEV_WEEK1: emp1 (Jan/2025) globalWi=4='42h' → ≥3; emp2 (Dez/2024) globalWi=9='36h' → ≤3
+    expect(workIn(entries, emp1Res.body.id, FEV_WEEK1)).toBeGreaterThanOrEqual(3); // 42h
+    expect(workIn(entries, emp2Res.body.id, FEV_WEEK1)).toBeLessThanOrEqual(3);   // 36h
 
-    // FEV_WEEK2 (cltWi=1): phase2='42h', phase3='36h'
-    // Phase3 não deve ultrapassar 3 turnos (limite 36h ADM)
-    expect(workIn(entries, emp2Res.body.id, FEV_WEEK2)).toBeLessThanOrEqual(3);
+    // FEV_WEEK2: emp1 (Jan/2025) globalWi=5='42h' → ≥3; emp2 (Dez/2024) globalWi=10='42h' → ≥3
+    expect(workIn(entries, emp1Res.body.id, FEV_WEEK2)).toBeGreaterThanOrEqual(3); // 42h
+    expect(workIn(entries, emp2Res.body.id, FEV_WEEK2)).toBeGreaterThanOrEqual(3); // 42h
 
-    // FEV_WEEK3 (cltWi=2): phase2='36h', phase3='42h'
-    // Phase2 não deve ultrapassar 3 turnos (limite 36h ADM)
-    expect(workIn(entries, emp1Res.body.id, FEV_WEEK3)).toBeLessThanOrEqual(3);
+    // FEV_WEEK3: emp1 (Jan/2025) globalWi=6='36h' → ≤3; emp2 (Dez/2024) globalWi=11='42h' → ≥3
+    expect(workIn(entries, emp1Res.body.id, FEV_WEEK3)).toBeLessThanOrEqual(3);   // 36h
+    expect(workIn(entries, emp2Res.body.id, FEV_WEEK3)).toBeGreaterThanOrEqual(3); // 42h
   });
 });
 

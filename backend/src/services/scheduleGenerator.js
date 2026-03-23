@@ -168,6 +168,64 @@ function getWeekTypeFromPhase(phase, weekIndex) {
   return patterns[phase][Math.min(weekIndex, 3)];
 }
 
+/**
+ * Retorna o primeiro domingo do mês como objeto Date (meia-noite UTC).
+ * @param {number} year
+ * @param {number} month - 1-based
+ * @returns {Date}
+ */
+function getFirstSundayOfMonth(year, month) {
+  const firstDay = new Date(Date.UTC(year, month - 1, 1));
+  const dow = firstDay.getUTCDay(); // 0 = Domingo
+  const daysToSun = dow === 0 ? 0 : 7 - dow;
+  return new Date(Date.UTC(year, month - 1, 1 + daysToSun));
+}
+
+/**
+ * Calcula o tipo de semana CLT usando índice global a partir do primeiro domingo
+ * do mês de início do ciclo do funcionário.
+ *
+ * Fix #127: substitui o índice local (cltWi) + calculateEffectiveCycleMonth por um
+ * índice global que não acumula deslocamento em meses com 5 semanas.
+ *
+ * Padrões por fase (determinada pelo cycle_start_month):
+ *   Fase 1 (cycle_start Jan–Abr): ['36h','42h','42h','36h']
+ *   Fase 2 (cycle_start Mai–Ago): ['42h','42h','36h','42h']
+ *   Fase 3 (cycle_start Set–Dez): ['42h','36h','42h','42h']
+ *
+ * @param {number} cycleStartYear
+ * @param {number} cycleStartMonth - 1-based
+ * @param {Date|string} weekStart  - Data (Date UTC ou string 'yyyy-MM-dd') do início da semana
+ * @returns {'36h' | '42h'}
+ */
+function getWeekTypeGlobal(cycleStartYear, cycleStartMonth, weekStart) {
+  // Padrão global de 12 semanas (3 meses × 4 semanas/mês):
+  //   Semanas 0–3  (fase 1 do ciclo, elapsed=0): ['36h','42h','42h','36h']
+  //   Semanas 4–7  (fase 2 do ciclo, elapsed=1): ['42h','42h','36h','42h']
+  //   Semanas 8–11 (fase 3 do ciclo, elapsed=2): ['42h','36h','42h','42h']
+  // Concatenados: 12 semanas que se repetem a cada ciclo de 3 meses.
+  const GLOBAL_PATTERN_12 = [
+    '36h', '42h', '42h', '36h',  // fase 1 (elapsed=0)
+    '42h', '42h', '36h', '42h',  // fase 2 (elapsed=1)
+    '42h', '36h', '42h', '42h',  // fase 3 (elapsed=2)
+  ];
+
+  // Primeiro domingo do mês de cycle_start
+  const cycleFirstSunday = getFirstSundayOfMonth(cycleStartYear, cycleStartMonth);
+
+  // weekStart como Date UTC
+  const weekStartDate = typeof weekStart === 'string'
+    ? new Date(weekStart + 'T00:00:00Z')
+    : weekStart;
+
+  // Índice global de semanas desde o cycleFirstSunday (pode ser negativo)
+  const globalWeekIdx = Math.round(
+    (weekStartDate.getTime() - cycleFirstSunday.getTime()) / (7 * 24 * 60 * 60 * 1000)
+  );
+
+  return GLOBAL_PATTERN_12[((globalWeekIdx % 12) + 12) % 12];
+}
+
 // Configuração mínima de crew recomendada (decisão PO — issue #108)
 const MIN_HEMO_WORKERS   = 4; // para garantir R5: ≥2 Hemo Diurno em todos os dias úteis
 const MIN_AMB_NOTURNO    = 4; // para garantir R3: ≥2 Noturno Amb em Qui/Sáb
@@ -356,12 +414,9 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   // Build weekly groups (Sun-based)
   const weeks = buildWeeks(dates);
 
-  // Compute the CLT cycle phase once for this employee/month combination.
-  const effectiveCycleMonth = calculateEffectiveCycleMonth(
-    employee.cycle_start_month ?? 1,
-    employee.cycle_start_year ?? new Date().getFullYear(),
-    genMonth, genYear
-  );
+  // Fix #127: effectiveCycleMonth (índice local 1|2|3) foi substituído por
+  // getWeekTypeGlobal que usa índice global baseado no cycle_start do funcionário.
+  // Mantém-se apenas o cltWeekOffset para detectar semanas parciais.
   // Issue #96: Detectar semanas parciais (< 7 dias) no início e fim do mês.
   // Meses que não começam num domingo têm uma semana inicial parcial.
   // O índice CLT (wi) deve contar apenas a partir da primeira semana COMPLETA.
@@ -430,8 +485,13 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       // Issue #96: wi CLT começa em 0 na primeira semana COMPLETA.
       // Se a semana atual é parcial (cltWi < 0), escalar sem meta CLT (usa máx 3 turnos conservador).
       const cltWi = wi - cltWeekOffset;
+      // Fix #127: usar índice global baseado no cycle_start do funcionário
       const weekTypeAdm = cltWi >= 0
-        ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi)
+        ? getWeekTypeGlobal(
+            employee.cycle_start_year ?? new Date().getFullYear(),
+            employee.cycle_start_month ?? 1,
+            week[0]
+          )
         : '36h'; // semana parcial: sem meta CLT — usa 3 turnos como padrão conservador
       const maxTurnosNaSemana = weekTypeAdm === '36h' ? 3 : 4;
       const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
@@ -514,8 +574,13 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       // Issue #96: wi CLT começa em 0 na primeira semana COMPLETA.
       // Semanas parciais (cltWi < 0) → '36h' como fallback (3 plantões, sem extra 6h).
       const cltWi = wi - cltWeekOffset;
+      // Fix #127: usar índice global baseado no cycle_start do funcionário
       const weekType = cltWi >= 0
-        ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi)
+        ? getWeekTypeGlobal(
+            employee.cycle_start_year ?? new Date().getFullYear(),
+            employee.cycle_start_month ?? 1,
+            week[0]
+          )
         : '36h'; // semana parcial: sem meta CLT — sem turno extra 6h
       // Fix #119: null-preferred workers must NOT enter the Diurno42h path.
       // The Diurno42h grid (positions 0,2,4,6) relies on fix #100's skippedAny to protect rest,
@@ -839,7 +904,14 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   // Correction step — preserva lockedOffDates (férias) e respeita limite semanal CLT
   // Passa isAdm explicitamente para que correctHours use o limite certo (turnos vs horas)
   // mesmo quando o turno 'Administrativo' não existe no DB.
-  const corrected = correctHours(entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS, preferredShift, lockedOffDates, weeks, effectiveCycleMonth, isAdm);
+  // Fix #127: passa cycleStartYear + cycleStartMonth (novo formato) para correctHours
+  // usar índice global em vez de effectiveCycleMonth (legado, propenso a drift).
+  const corrected = correctHours(
+    entries, shiftTypes, shiftMap, totalHours, TARGET_HOURS,
+    preferredShift, lockedOffDates, weeks,
+    employee.cycle_start_year ?? new Date().getFullYear(), isAdm,
+    employee.cycle_start_month ?? 1
+  );
 
   // Persist
   const insertEntry = db.prepare(
@@ -866,12 +938,19 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
     });
   }
 
-  // Issue #96: semanas parciais recebem label 'partial', semanas CLT usam cltWi.
+  // Issue #96: semanas parciais recebem label 'partial', semanas CLT usam índice global.
+  // Fix #127: usa getWeekTypeGlobal para evitar drift em meses com 5 semanas.
   const weekClassifications = weeks.map((week, wi) => {
     const cltWi = wi - cltWeekOffset;
     return {
       weekIndex: wi,
-      type: cltWi >= 0 ? getWeekTypeFromPhase(effectiveCycleMonth, cltWi) : 'partial',
+      type: cltWi >= 0
+        ? getWeekTypeGlobal(
+            employee.cycle_start_year ?? new Date().getFullYear(),
+            employee.cycle_start_month ?? 1,
+            week[0]
+          )
+        : 'partial',
       partial: week.length < 7,
     };
   });
@@ -1096,16 +1175,16 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
     // Para motoristas não-ADM, Diurno não tem turno extra → isNoturno = false
     const isNoturno = false;
 
-    const phase = calculateEffectiveCycleMonth(
-      emp.cycle_start_month ?? 1,
-      emp.cycle_start_year ?? genYear,
-      genMonth, genYear
-    );
+    // Fix #127: usar índice global baseado no cycle_start do funcionário.
     // Issue #103: aplicar cltWeekOffset para alinhar índice de semana com o gerador.
     // Semanas parciais (cltWi < 0) usam '36h' como fallback — sem meta CLT.
     const cltWi = bounds.weekIndex - cltWeekOffset;
     const weekType = cltWi >= 0
-      ? getWeekTypeFromPhase(phase, cltWi)
+      ? getWeekTypeGlobal(
+          emp.cycle_start_year ?? genYear,
+          emp.cycle_start_month ?? 1,
+          bounds.weekStart
+        )
       : '36h';
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
@@ -1284,15 +1363,15 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
     // O enforcement noturno converte para turno Noturno → isNoturno = true para não-ADM
     const isNoturno = !isAdm;
 
-    const phase = calculateEffectiveCycleMonth(
-      emp.cycle_start_month ?? 1,
-      emp.cycle_start_year ?? genYear,
-      genMonth, genYear
-    );
+    // Fix #127: usar índice global baseado no cycle_start do funcionário.
     // Issue #103: aplicar cltWeekOffset para alinhar índice de semana com o gerador.
     const cltWi = bounds.weekIndex - cltWeekOffset;
     const weekType = cltWi >= 0
-      ? getWeekTypeFromPhase(phase, cltWi)
+      ? getWeekTypeGlobal(
+          emp.cycle_start_year ?? genYear,
+          emp.cycle_start_month ?? 1,
+          bounds.weekStart
+        )
       : '36h';
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
@@ -1450,16 +1529,16 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
     const empShift = getShiftForEmp(emp);
     const isNoturno = !isAdm && empShift?.name === SHIFT_NOTURNO_NAME;
 
-    const phase = calculateEffectiveCycleMonth(
-      emp.cycle_start_month ?? 1,
-      emp.cycle_start_year ?? genYear,
-      genMonth, genYear
-    );
+    // Fix #127: usar índice global baseado no cycle_start do funcionário.
     // Issue #103: aplicar cltWeekOffset para alinhar índice de semana com o gerador.
     // Semanas parciais (cltWi < 0) usam '36h' como fallback — sem meta CLT.
     const cltWi = bounds.weekIndex - cltWeekOffset;
     const weekType = cltWi >= 0
-      ? getWeekTypeFromPhase(phase, cltWi)
+      ? getWeekTypeGlobal(
+          emp.cycle_start_year ?? genYear,
+          emp.cycle_start_month ?? 1,
+          bounds.weekStart
+        )
       : '36h';
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
@@ -1771,10 +1850,18 @@ function hasAdequateRest(allEntries, targetEntry, shift, shiftMap) {
 export function correctHours(
   entries, shiftTypes, shiftMap, currentHours, target,
   preferredShift = null, lockedOffDates = new Set(),
-  weeks = [], effectiveCycleMonth = null, isAdmOverride = null
+  weeks = [], cycleStartYearOrLegacy = null, isAdmOverride = null,
+  cycleStartMonth = null
 ) {
   const diff = currentHours - target;
   if (Math.abs(diff) <= 6) return entries;
+
+  // Suporte legado: cycleStartYearOrLegacy pode ser cycleStartYear (number ≥ 1900)
+  // ou effectiveCycleMonth (1|2|3) para compatibilidade com testes unitários antigos.
+  // Quando cycleStartMonth é fornecido, trata-se do novo formato (year + month).
+  const isNewFormat = cycleStartMonth !== null;
+  const cycleStartYear = isNewFormat ? cycleStartYearOrLegacy : null;
+  const legacyEffectiveCycleMonth = isNewFormat ? null : cycleStartYearOrLegacy;
 
   // Determina se o motorista é ADM ou NOTURNO com base no turno preferido.
   // isAdmOverride é passado pelo chamador quando o turno preferido não está disponível
@@ -1786,13 +1873,20 @@ export function correctHours(
   // para verificação do limite CLT por semana em conversões de folga→trabalho.
   // Issue #96: semanas parciais (< 7 dias) usam '42h' como fallback conservador —
   // não remover entries de semanas parciais que estão naturalmente abaixo do limite.
+  // Fix #127: usa getWeekTypeGlobal quando cycleStartYear + cycleStartMonth fornecidos;
+  // senão cai para o cálculo legado (para compatibilidade com testes unitários).
   const firstWeekIsPartialCH = weeks.length > 0 && weeks[0].length < 7;
   const cltWeekOffsetCH = firstWeekIsPartialCH ? 1 : 0;
   const weekMeta = weeks.map((week, wi) => {
     const cltWiCH = wi - cltWeekOffsetCH;
-    const weekType = (effectiveCycleMonth !== null && cltWiCH >= 0)
-      ? getWeekTypeFromPhase(effectiveCycleMonth, cltWiCH)
-      : '42h'; // fallback conservador: semanas parciais ou sem contexto de fase
+    let weekType;
+    if (isNewFormat && cltWiCH >= 0) {
+      weekType = getWeekTypeGlobal(cycleStartYear, cycleStartMonth, week[0]);
+    } else if (!isNewFormat && legacyEffectiveCycleMonth !== null && cltWiCH >= 0) {
+      weekType = getWeekTypeFromPhase(legacyEffectiveCycleMonth, cltWiCH);
+    } else {
+      weekType = '42h'; // fallback conservador: semanas parciais ou sem contexto de fase
+    }
     return {
       weekStart: week[0],
       weekEnd: week[week.length - 1],
@@ -1853,7 +1947,7 @@ export function correctHours(
       if (!shift) continue;
 
       // Guard: verificar se a semana desta entrada ainda está acima do limite CLT.
-      if (weeks.length > 0 && effectiveCycleMonth !== null) {
+      if (weeks.length > 0 && (isNewFormat || legacyEffectiveCycleMonth !== null)) {
         const wm = weekMetaFor(entry.date);
         if (wm) {
           const { cltLimit } = wm;
@@ -1892,7 +1986,7 @@ export function correctHours(
 
       // Determina o turno candidato respeitando o limite semanal CLT.
       let candidateShift = shiftToAdd;
-      if (weeks.length > 0 && effectiveCycleMonth !== null) {
+      if (weeks.length > 0 && (isNewFormat || legacyEffectiveCycleMonth !== null)) {
         const wm = weekMetaFor(entry.date);
         if (wm && wouldExceedWeeklyLimit(wm, candidateShift)) {
           // Para NOTURNO em semana 42h, tenta turno extra de 6h como fallback.
