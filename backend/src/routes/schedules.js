@@ -53,7 +53,7 @@ router.get('/', (req, res) => {
               e.work_schedule as employee_work_schedule,
               st.name as shift_name, st.color as shift_color, st.start_time, st.end_time, st.duration_hours
        FROM schedule_entries se
-       JOIN employees e ON se.employee_id = e.id
+       JOIN employees e ON se.employee_id = e.id AND e.active = 1
        LEFT JOIN shift_types st ON se.shift_type_id = st.id
        WHERE se.date >= ? AND se.date <= ?
        ORDER BY se.date, e.name`
