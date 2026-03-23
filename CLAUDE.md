@@ -26,8 +26,12 @@ cd frontend && npm run dev    # porta 5173
 # Build de producao
 cd frontend && npm run build
 
-# Testes (ainda nao configurados — ver backlog)
+# Testes
 npm test
+
+# Banco de desenvolvimento (apenas dev — NUNCA em produção)
+cd backend && npm run db:reset   # apaga escala.db e recria schema vazio
+cd backend && npm run db:seed    # popula com 12 funcionários representativos (idempotente)
 ```
 
 ## Architecture
