@@ -2,8 +2,6 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import { useMemo, useRef } from 'react';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
 
 export default function CalendarView({ scheduleData, currentMonth, currentYear, onEntryClick }) {
   const calendarRef = useRef(null);
@@ -40,6 +38,7 @@ export default function CalendarView({ scheduleData, currentMonth, currentYear, 
         initialView="dayGridMonth"
         initialDate={initialDate}
         locale="pt-br"
+        firstDay={0}
         events={events}
         eventClick={(info) => {
           const entry = info.event.extendedProps.entry;
