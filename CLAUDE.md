@@ -138,6 +138,7 @@ Cada worktree precisa de um `.env` próprio com o token da persona correspondent
   - Identificar e corrigir falhas de hardening (sanitização, validação, tipos)
   - Nunca misturar testes de módulos sem relação no mesmo PR
   - Assertions específicas — nunca `status_code in (200, 422)`
+  - **Todo PR de teste que envolva geração de escala mensal deve cobrir os 12 meses do ano (OBRIGATÓRIO)** — ano de referência: 2026. Exceção: testes de regressão de bug específico podem focar no mês do bug, com justificativa explícita. Ver `docs/BUSINESS_RULES.md` para os meses de alto risco (semana parcial ≥ 4 dias).
 
 ### DevOps Senior
 - **Papel**: Automação de build, deploy e infraestrutura
@@ -348,6 +349,7 @@ O autor do fix DEVE incluir no PR:
 5. Corretude (lógica, edge cases, tipos)
 6. Consistência com patterns do projeto (ESM, async/await)
 7. Testes automatizados cobrindo o que foi adicionado/alterado
+8. **PRs de teste de geração de escala**: verificar que os 12 meses de 2026 estão cobertos — bloquear se menos de 12 meses sem justificativa explícita do PO. Meses obrigatórios de alto risco: Abr, Jun, Jul, Set, Dez/2026 (semana parcial ≥ 4 dias).
 
 ### Template de review com REQUEST_CHANGES (OBRIGATÓRIO)
 
