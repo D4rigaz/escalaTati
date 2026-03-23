@@ -5,7 +5,7 @@
  *   - Motorista null-preferred em semana 42h: deve produzir 42h (3×12h + 1×6h Manhã/Tarde)
  *   - Motorista null-preferred em semana 36h: deve produzir 36h (3×12h)
  *   - Nunca duas semanas consecutivas de 36h quando uma delas é weekType='42h'
- *   - Validação para os 4 perfis: null-preferred, Noturno, Manhã, Tarde
+ *   - Validação para perfis null-preferred e Noturno (regressão do bug reportado)
  *   - Validação para 3 cycle_starts distintos (Jan, Mai, Set/2026)
  *
  * Calendário de referência — Abril 2026:
@@ -48,12 +48,6 @@ function weeklyHours(entries, empId, weekDates) {
   return entries
     .filter((e) => e.employee_id === empId && weekDates.includes(e.date) && !e.is_day_off && e.duration_hours)
     .reduce((sum, e) => sum + e.duration_hours, 0);
-}
-
-async function generate() {
-  const { results } = await generateSchedule(APR);
-  // Busca entries do DB diretamente via generateSchedule (retornado em weekClassifications)
-  return results;
 }
 
 // Helper: gera e lê entries do DB
