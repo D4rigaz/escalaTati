@@ -174,7 +174,7 @@ function getWeekTypeFromPhase(phase, weekIndex) {
  * @param {number} month - 1-based
  * @returns {Date}
  */
-function getFirstSundayOfMonth(year, month) {
+export function getFirstSundayOfMonth(year, month) {
   const firstDay = new Date(Date.UTC(year, month - 1, 1));
   const dow = firstDay.getUTCDay(); // 0 = Domingo
   const daysToSun = dow === 0 ? 0 : 7 - dow;
@@ -198,7 +198,7 @@ function getFirstSundayOfMonth(year, month) {
  * @param {Date|string} weekStart  - Data (Date UTC ou string 'yyyy-MM-dd') do início da semana
  * @returns {'36h' | '42h'}
  */
-function getWeekTypeGlobal(cycleStartYear, cycleStartMonth, weekStart) {
+export function getWeekTypeGlobal(cycleStartYear, cycleStartMonth, weekStart) {
   // Padrão global de 12 semanas (3 meses × 4 semanas/mês):
   //   Semanas 0–3  (fase 1 do ciclo, elapsed=0): ['36h','42h','42h','36h']
   //   Semanas 4–7  (fase 2 do ciclo, elapsed=1): ['42h','42h','36h','42h']
