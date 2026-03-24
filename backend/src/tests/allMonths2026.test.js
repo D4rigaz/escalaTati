@@ -176,6 +176,15 @@ describe('regras de negócio — geração para todos os meses de 2026', () => {
       // (Noturno 19:00-07:00 → Manhã 07:00 | Manhã 07:00-13:00 → Tarde 13:00 | Tarde 13:00-19:00 → Noturno 19:00)
       const EMENDADO = new Set(['Noturno→Manhã', 'Manhã→Tarde', 'Tarde→Noturno']);
 
+      // Fix #145: PO rule — "próximo domingo é sempre uma nova semana".
+      // Workers Diurno em semanas 42h consecutivas têm gap Sáb 19:00 → Dom 07:00 = 12h na
+      // fronteira de semana. Este gap é aceito por regra de negócio no caminho isDiurno42h.
+      function isSatSunWeekBoundary(a, b) {
+        const dA = new Date(a.date + 'T12:00:00');
+        const dB = new Date(b.date + 'T12:00:00');
+        return dA.getDay() === 6 && dB.getDay() === 0 && (dB - dA) === 86_400_000;
+      }
+
       const byEmp = {};
       for (const e of entries) {
         if (e.is_day_off || !e.start_time || !(e.duration_hours > 0)) continue;
@@ -194,6 +203,9 @@ describe('regras de negócio — geração para todos os meses de 2026', () => {
 
           // Par emendado com encaixe imediato (restMs ≤ 0): permitido por regra de negócio
           if (EMENDADO.has(pairKey) && restMs <= 0) continue;
+
+          // Fix #145: gap Sáb→Dom na fronteira de semana (≈12h) permitido para Diurno 42h
+          if (isSatSunWeekBoundary(prev, curr)) continue;
 
           const restH = restMs / 3_600_000;
           expect(

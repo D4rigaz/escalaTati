@@ -122,15 +122,15 @@ describe('fix #100 — DIURNO 42h semana com Dom bloqueado por rest cross-week',
     expect(extraShifts.length).toBe(1);
   });
 
-  // ── Teste 2: Fix principal — 4 motoristas com Dom bloqueado → todos 36h ───
-  it('fix: 4 motoristas (id%4=0,1,2,3) com Dom Jan 19 bloqueado por rest → weekHours===36 cada', async () => {
+  // ── Teste 2: Fix #145 — 4 motoristas com Dom Jan 19 → todos 42h ─────────────
+  it('fix #145: 4 motoristas (id%4=0,1,2,3) com Dom Jan 19 trabalhado (nova semana) → weekHours===42 cada', async () => {
     // cycle_start=Jan/2025 → fase 1 → ['36h','42h','42h','36h']
     // Semana 2 (Jan 12–18): 42h, último turno = Sáb Jan 18 19:00
-    // Semana 3 (Jan 19–25): 42h, Dom Jan 19 07:00 → rest=12h < 24h → BLOQUEADO
+    // Semana 3 (Jan 19–25): 42h, Fix #145: Dom Jan 19 não é bloqueado (próximo domingo é nova semana)
     // 4 motoristas: ids 1,2,3,4 → id%4 = 1,2,3,0 (todos os restos cobertos)
     const ids = [];
     for (let i = 0; i < 4; i++) {
-      ids.push(await createDiurnoEmployee(`Motor Fix100 ${i}`, 1, 2025));
+      ids.push(await createDiurnoEmployee(`Motor Fix145 ${i}`, 1, 2025));
     }
 
     const allEntries = await generateAndFetchEntries(JAN2025);
@@ -138,18 +138,18 @@ describe('fix #100 — DIURNO 42h semana com Dom bloqueado por rest cross-week',
     for (const empId of ids) {
       const w3 = weekEntries(allEntries, empId, WEEK3_JAN);
 
-      // Horas da semana: deve ser exatamente 36h (3 × 12h)
+      // Horas da semana: deve ser exatamente 42h (3×12h + 1×6h)
       const hours = weekHours(w3);
-      expect(hours, `empId=${empId} id%4=${empId % 4} weekHours`).toBe(36);
+      expect(hours, `empId=${empId} id%4=${empId % 4} weekHours`).toBe(42);
 
-      // Nenhum turno de 6h — o turno extra não deve ser atribuído com Dom bloqueado
+      // Exatamente 1 turno de 6h — extra shift distribuído por id%4
       const extraShifts = w3.filter((e) => !e.is_day_off && e.duration_hours === 6);
-      expect(extraShifts.length, `empId=${empId} id%4=${empId % 4} extraShifts`).toBe(0);
+      expect(extraShifts.length, `empId=${empId} id%4=${empId % 4} extraShifts`).toBe(1);
 
-      // Dom Jan 19 deve ser folga
+      // Dom Jan 19 deve ser plantão (não folga)
       const domEntry = w3.find((e) => e.date === '2025-01-19');
       expect(domEntry, `empId=${empId} domEntry existe`).toBeDefined();
-      expect(domEntry.is_day_off, `empId=${empId} Dom is_day_off`).toBe(1);
+      expect(domEntry.is_day_off, `empId=${empId} Dom trabalhado`).toBe(0);
     }
   });
 
@@ -203,11 +203,11 @@ describe('fix #100 — DIURNO 42h semana com Dom bloqueado por rest cross-week',
     expect(monthTotal).toBeLessThanOrEqual(192);
   });
 
-  // ── Teste 5: Assertion estrita — 0 turnos de 6h quando Dom bloqueado ──────
-  it('edge: nenhum dos 4 motoristas recebe turno de 6h na semana com Dom bloqueado', async () => {
+  // ── Teste 5: Fix #145 — cada motorista recebe exatamente 1 turno de 6h ──────
+  it('edge fix #145: cada um dos 4 motoristas recebe exatamente 1 turno de 6h com Dom trabalhado', async () => {
     const ids = [];
     for (let i = 0; i < 4; i++) {
-      ids.push(await createDiurnoEmployee(`Motor Edge100 ${i}`, 1, 2025));
+      ids.push(await createDiurnoEmployee(`Motor Edge145 ${i}`, 1, 2025));
     }
 
     const allEntries = await generateAndFetchEntries(JAN2025);
@@ -215,13 +215,13 @@ describe('fix #100 — DIURNO 42h semana com Dom bloqueado por rest cross-week',
     for (const empId of ids) {
       const w3 = weekEntries(allEntries, empId, WEEK3_JAN);
 
-      // Assertion estrita: nenhum turno de 6h — não usar toBeGreaterThanOrEqual(0)
+      // Fix #145: exatamente 1 turno de 6h por worker (id%4 distribui a posição extra)
       const extraShifts = w3.filter((e) => !e.is_day_off && e.duration_hours === 6);
-      expect(extraShifts.length).toBe(0);
+      expect(extraShifts.length).toBe(1);
 
-      // Dom Jan 19 is_day_off===1 — não usar toBeTruthy()
+      // Dom Jan 19 trabalhado — Fix #145: próximo domingo é sempre nova semana
       const domEntry = w3.find((e) => e.date === '2025-01-19');
-      expect(domEntry?.is_day_off).toBe(1);
+      expect(domEntry?.is_day_off).toBe(0);
     }
   });
 });
