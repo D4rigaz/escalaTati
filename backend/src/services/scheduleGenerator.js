@@ -497,38 +497,122 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       const maxWorkInWeek = Math.min(freeInWeek.length, maxTurnosNaSemana);
       const actualOffInWeek = freeInWeek.length - Math.max(0, maxWorkInWeek);
 
-      const selectedOff = selectOffDays(freeInWeek, actualOffInWeek, employee.id);
-      const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
+      // Fix #NNN: ADM Flex sem turno Administrativo no DB (preferredShift=null) em semana 42h.
+      // Usa grade 4-posições [0,2,4,6] idêntica ao path isNullPreferred42h (fix #150):
+      //   3 posições → 12h via selectShift; 1 posição (extraIdx) → 6h (Manhã ou Tarde) = 42h.
+      // Sem este fix: selectOffDays retorna 4 dias consecutivos → 4×12h = 48h (CLT violado).
+      // O espaçamento [0,2,4,6] garante ≥1 dia livre entre turnos, evitando violações de rest.
+      // Só aplica quando !preferredShift — não altera workers com turno Administrativo 10h.
+      const admManhaShift = shiftTypes.find((s) => s.name === SHIFT_MANHA_NAME);
+      const admTardeShift = shiftTypes.find((s) => s.name === SHIFT_TARDE_NAME);
+      const useAdm42hGrid = !preferredShift && weekTypeAdm === '42h';
 
-      for (const date of selectedWork) {
-        const shift = selectShift(twelveHourShifts, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
-        if (shift) {
-          entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
-          totalHours += shift.duration_hours;
+      if (useAdm42hGrid) {
+        // Grade [0,2,4,6] sobre freeInWeek (não precisa de selectedOff do selectOffDays)
+        const available = freeInWeek.filter(
+          (d) => !lockedDates.has(d) && !vacationDatesForEmp.has(d)
+        );
+        const activePositions = [0, 2, 4, 6].filter((i) => i < available.length);
+        const activeDates = new Set();
 
-          const shiftStart = computeShiftStart(date, shift);
-          const restHours = lastShiftEnd
-            ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
-            : Infinity;
+        if (activePositions.length > 0) {
+          const extraPositionIndex = employee.id % activePositions.length;
+          let skippedAny = false;
 
-          consecutiveHours = restHours === 0
-            ? consecutiveHours + shift.duration_hours
-            : shift.duration_hours;
+          for (let pi = 0; pi < activePositions.length; pi++) {
+            const date = available[activePositions[pi]];
 
-          lastShiftEnd = computeShiftEnd(date, shift);
-          lastShiftName = shift.name;
-        } else {
+            if (lastShiftEnd && pi > 0) {
+              const shiftRef = (!skippedAny && pi === extraPositionIndex)
+                ? (admManhaShift || admTardeShift)
+                : (twelveHourShifts[0] || null);
+              if (shiftRef) {
+                const dStart = computeShiftStart(date, shiftRef);
+                if (dStart) {
+                  const restHours = (dStart - lastShiftEnd) / (1000 * 60 * 60);
+                  if (restHours >= 0 && restHours < MIN_REST_HOURS) {
+                    if (!isValidEmendado(lastShiftName, shiftRef.name)) {
+                      skippedAny = true;
+                      continue;
+                    }
+                  }
+                }
+              }
+            }
+
+            activeDates.add(date);
+            if (!skippedAny && pi === extraPositionIndex) {
+              const extraShift = admManhaShift || admTardeShift;
+              if (extraShift) {
+                entries.push({ employee_id: employee.id, shift_type_id: extraShift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+                totalHours += extraShift.duration_hours;
+                lastShiftEnd = computeShiftEnd(date, extraShift);
+                lastShiftName = extraShift.name;
+                consecutiveHours = extraShift.duration_hours;
+              }
+            } else {
+              const shift = selectShift(twelveHourShifts, null, lastShiftEnd, lastShiftName, consecutiveHours, date);
+              if (shift) {
+                entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+                totalHours += shift.duration_hours;
+                const shiftStart = computeShiftStart(date, shift);
+                const restHours = lastShiftEnd
+                  ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
+                  : Infinity;
+                consecutiveHours = restHours === 0
+                  ? consecutiveHours + shift.duration_hours
+                  : shift.duration_hours;
+                lastShiftEnd = computeShiftEnd(date, shift);
+                lastShiftName = shift.name;
+              } else {
+                skippedAny = true;
+              }
+            }
+          }
+        }
+
+        for (const date of freeInWeek) {
+          if (!activeDates.has(date)) {
+            entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+            consecutiveHours = 0;
+            lastShiftName = null;
+          }
+        }
+      } else {
+        const selectedOff = selectOffDays(freeInWeek, actualOffInWeek, employee.id);
+        const selectedWork = freeInWeek.filter((d) => !selectedOff.includes(d));
+
+        for (const date of selectedWork) {
+          const shift = selectShift(twelveHourShifts, preferredShift, lastShiftEnd, lastShiftName, consecutiveHours, date);
+          if (shift) {
+            entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+            totalHours += shift.duration_hours;
+
+            const shiftStart = computeShiftStart(date, shift);
+            const restHours = lastShiftEnd
+              ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
+              : Infinity;
+
+            consecutiveHours = restHours === 0
+              ? consecutiveHours + shift.duration_hours
+              : shift.duration_hours;
+
+            lastShiftEnd = computeShiftEnd(date, shift);
+            lastShiftName = shift.name;
+          } else {
+            entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+            consecutiveHours = 0;
+            lastShiftName = null;
+          }
+        }
+
+        for (const date of selectedOff) {
           entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
           consecutiveHours = 0;
           lastShiftName = null;
         }
       }
 
-      for (const date of selectedOff) {
-        entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
-        consecutiveHours = 0;
-        lastShiftName = null;
-      }
     }
   } else {
     // Ambulância / Hemodiálise — plantão 12h, meta 160h/mês
