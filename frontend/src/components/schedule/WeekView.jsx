@@ -12,14 +12,15 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
       : [];
 
     const dates = allDates.map((date) => {
-      const d = new Date(date + 'T12:00:00');
-      const dayNum  = d.getDate();
-      const dayMonth = d.getMonth() + 1; // 1-based
+      // Parsing direto do string "YYYY-MM-DD" evita ambiguidade de timezone do construtor Date.
+      // new Date("YYYY-MM-DD") trata como UTC midnight → getDay() pode retornar dia errado.
+      const [yearNum, monthNum, dayNum] = date.split('-').map(Number);
+      const dow = new Date(Date.UTC(yearNum, monthNum - 1, dayNum)).getUTCDay();
       // Mostra "dia/mês" quando a data pertence a um mês diferente do calendário selecionado
-      const label = dayMonth !== currentMonth
-        ? `${dayNum}/${MONTH_ABBR[dayMonth - 1]}`
+      const label = monthNum !== currentMonth
+        ? `${dayNum}/${MONTH_ABBR[monthNum - 1]}`
         : String(dayNum);
-      return { date, dayNum: label, dayLabel: DAY_LABELS[d.getDay()], isOtherMonth: dayMonth !== currentMonth };
+      return { date, dayNum: label, dayLabel: DAY_LABELS[dow], dow, isOtherMonth: monthNum !== currentMonth };
     });
 
     if (!scheduleData?.entries) return { dates, employees: [], entryMatrix: {} };
@@ -63,8 +64,8 @@ export default function WeekView({ scheduleData, currentMonth, currentYear, onEn
             <th className="sticky left-0 bg-gray-50 text-left px-3 py-2 font-semibold text-gray-600 border border-gray-200 min-w-[140px]">
               Motorista
             </th>
-            {dates.map(({ date, dayNum, dayLabel, isOtherMonth }) => {
-              const isWeekend = [0, 6].includes(new Date(date + 'T12:00:00').getDay());
+            {dates.map(({ date, dayNum, dayLabel, dow, isOtherMonth }) => {
+              const isWeekend = dow === 0 || dow === 6;
               return (
                 <th
                   key={date}
