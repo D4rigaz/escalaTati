@@ -588,6 +588,10 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
       // Workers with preferred_shift_id=null fall through to the else branch where
       // natural emendado patterns (Noturno→Manhã etc.) correctly produce 42h.
       const isDiurno42h = !isNoturno && weekType === '42h' && rules.preferred_shift_id !== null;
+      // Fix #150: null-preferred (preferred_shift_id=null) non-Noturno workers in CLT 42h weeks
+      // need the same 4-position grid as isDiurno42h to guarantee 3×12h + 1×6h = 42h.
+      // Cannot use isDiurno42h (requires preferredShift !== null). Uses selectShift for 12h.
+      const isNullPreferred42h = !isNoturno && weekType === '42h' && rules.preferred_shift_id === null && cltWi >= 0;
 
       if (isDiurno42h) {
         // Dias disponíveis da semana (não locked, não vacation)
@@ -722,6 +726,81 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
               lastShiftName = null;
             }
           }
+        } else if (isNullPreferred42h) {
+          // Fix #150: null-preferred workers in CLT 42h weeks: 3×12h + 1×6h = 42h.
+          // Same 4-position grid (indices 0,2,4,6) as isDiurno42h; selectShift for 12h positions.
+          const available = freeInWeek.filter(
+            (d) => !lockedDates.has(d) && !vacationDatesForEmp.has(d)
+          );
+          const activePositions = [0, 2, 4, 6].filter((i) => i < available.length);
+          const activeDates = new Set();
+
+          if (activePositions.length > 0) {
+            const extraPositionIndex = employee.id % activePositions.length;
+            let skippedAny = false;
+
+            for (let pi = 0; pi < activePositions.length; pi++) {
+              const date = available[activePositions[pi]];
+
+              // Fix #145 PO rule: pi=0 (first day of week) never blocked by cross-week rest.
+              if (lastShiftEnd && pi > 0) {
+                const shiftRef = (!skippedAny && pi === extraPositionIndex)
+                  ? (manhaShift || tardeShift)
+                  : (twelveHourShifts[0] || null);
+                if (shiftRef) {
+                  const dStart = computeShiftStart(date, shiftRef);
+                  if (dStart) {
+                    const restHours = (dStart - lastShiftEnd) / (1000 * 60 * 60);
+                    if (restHours >= 0 && restHours < MIN_REST_HOURS) {
+                      if (!isValidEmendado(lastShiftName, shiftRef.name)) {
+                        skippedAny = true;
+                        continue;
+                      }
+                    }
+                  }
+                }
+              }
+
+              activeDates.add(date);
+              if (!skippedAny && pi === extraPositionIndex) {
+                const extraShift = manhaShift || tardeShift;
+                if (extraShift) {
+                  entries.push({ employee_id: employee.id, shift_type_id: extraShift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+                  totalHours += extraShift.duration_hours;
+                  lastShiftEnd = computeShiftEnd(date, extraShift);
+                  lastShiftName = extraShift.name;
+                  consecutiveHours = extraShift.duration_hours;
+                }
+              } else {
+                const shift = selectShift(twelveHourShifts, null, lastShiftEnd, lastShiftName, consecutiveHours, date);
+                if (shift) {
+                  entries.push({ employee_id: employee.id, shift_type_id: shift.id, date, is_day_off: 0, is_locked: 0, notes: null });
+                  totalHours += shift.duration_hours;
+                  const shiftStart = computeShiftStart(date, shift);
+                  const restHours = lastShiftEnd
+                    ? (shiftStart - lastShiftEnd) / (1000 * 60 * 60)
+                    : Infinity;
+                  consecutiveHours = restHours === 0
+                    ? consecutiveHours + shift.duration_hours
+                    : shift.duration_hours;
+                  lastShiftEnd = computeShiftEnd(date, shift);
+                  lastShiftName = shift.name;
+                } else {
+                  skippedAny = true;
+                  continue;
+                }
+              }
+            }
+          }
+
+          for (const date of freeInWeek) {
+            if (!activeDates.has(date)) {
+              entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
+              consecutiveHours = 0;
+              lastShiftName = null;
+            }
+          }
+
         } else {
 
         // Garante mínimo 1 folga/semana quando não há férias ou forced-off (Regra: máx 6 dias consecutivos)
@@ -881,7 +960,7 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
             }
           }
         }
-        } // end else (isDiurnoPartialWeek)
+        } // end else (generic path)
       }
 
       // Fix #104: normalizar lastShiftEnd/lastShiftName após cada semana.
