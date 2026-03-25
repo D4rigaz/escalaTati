@@ -116,24 +116,23 @@ describe('Jan/2026 (cycle_start=Jan/2026, globalWi=1)', () => {
 // globalWi=4 → '42h'; globalWi=5 → '42h'
 //
 // Nota: semana 0 (Fev 1–7) é afetada pelo enforcement (4 semanas, ≈150h pre-enforcement).
-// Testando semana 1 (Fev 8–14, globalWi=5='42h'): Dom Fev 8 bloqueado por rest cross-week
-// (Sáb Fev 7 19:00 → Fev 8 07:00 = 12h < 24h), skippedAny=true → 3 plantões de 12h = 36h.
+// Testando semana 1 (Fev 8–14, globalWi=5='42h'): Fix #145 — Dom Fev 8 não bloqueado
+// (próximo domingo é sempre uma nova semana) → 4 plantões = 42h corretos.
 
 describe('Fev/2026 (cycle_start=Jan/2026, globalWi=5)', () => {
-  it('semana 1 (Fev 8–14) → 36h: Dom bloqueado (skippedAny) — 3×12h', async () => {
+  it('semana 1 (Fev 8–14) → 42h: Fix #145 — Dom trabalhado (semana nova) — 3×12h + 1×6h', async () => {
     const empId = await createDiurnoWorker('DIURNO Fev26 w1', 1, 2026);
     const entries = await generateAndGetEntries(2, 2026);
 
     const week = entriesInRange(entries, empId, '2026-02-08', '2026-02-14');
     const hours = weekHours(week);
 
-    expect(hours, 'Fev semana 1 = 36h (skippedAny)').toBe(36);
+    expect(hours, 'Fev semana 1 = 42h (Fix #145)').toBe(42);
 
     const workShifts = week.filter((e) => !e.is_day_off);
-    expect(workShifts.length, '3 plantões (Dom bloqueado)').toBe(3);
-    workShifts.forEach((e) => {
-      expect(e.duration_hours, 'plantão 12h').toBe(12);
-    });
+    expect(workShifts.length, '4 plantões em semana 42h DIURNO').toBe(4);
+    const sixHour = workShifts.filter((e) => e.duration_hours === 6);
+    expect(sixHour.length, '1 turno de 6h em semana 42h').toBe(1);
   });
 });
 
@@ -185,26 +184,25 @@ describe('Mar/2026 (cycle_start=Jan/2026, globalWi=8)', () => {
 // Semana 3: Abr 26–Mai 2, globalWi=16 → GLOBAL_PATTERN_12[4] = '42h'
 //
 // Nota: semana 0 é afetada pelo enforcement (4 semanas, ≈150h < cap=160h).
-// Semana 1: Dom Abr 12 bloqueado por rest cross-week (Sáb Abr 11 19:00 → 12h) → skippedAny → 36h.
+// Semana 1: Fix #145 — Dom Abr 12 não bloqueado (próximo domingo é sempre uma nova semana) → 42h.
 // Semana 3 testada para verificar 42h limpo após cap atingido.
 
 describe('Abr/2026 — alto risco (cycle_start=Jan/2026, globalWi=14/16)', () => {
-  it('semana 1 (Abr 12–18) → 36h: Dom bloqueado (skippedAny) — 3×12h', async () => {
-    // Dom Abr 12 bloqueado por rest cross-week (Sáb Abr 11 19:00 → 12h < 24h).
-    // skippedAny=true → 3 plantões Seg–Sáb = 36h (fix #100).
+  it('semana 1 (Abr 12–18) → 42h: Fix #145 — Dom trabalhado (semana nova) — 3×12h + 1×6h', async () => {
+    // Fix #145: Dom Abr 12 não é bloqueado pelo rest cross-semana (Sáb Abr 11 19:00 → 12h).
+    // PO rule: próximo domingo é sempre uma nova semana → 4 plantões = 42h.
     const empId = await createDiurnoWorker('DIURNO Abr26 w1', 1, 2026);
     const entries = await generateAndGetEntries(4, 2026);
 
     const week = entriesInRange(entries, empId, '2026-04-12', '2026-04-18');
     const hours = weekHours(week);
 
-    expect(hours, 'Abr semana 1 = 36h (skippedAny)').toBe(36);
+    expect(hours, 'Abr semana 1 = 42h (Fix #145)').toBe(42);
 
     const workShifts = week.filter((e) => !e.is_day_off);
-    expect(workShifts.length, '3 plantões (Dom bloqueado)').toBe(3);
-    workShifts.forEach((e) => {
-      expect(e.duration_hours, 'plantão 12h').toBe(12);
-    });
+    expect(workShifts.length, '4 plantões em semana 42h DIURNO').toBe(4);
+    const sixHour = workShifts.filter((e) => e.duration_hours === 6);
+    expect(sixHour.length, '1 turno de 6h em semana 42h').toBe(1);
   });
 
   it('semana 3 (Abr 26–Mai 2) → 42h: 3×12h + 1×6h', async () => {
@@ -253,26 +251,25 @@ describe('Mai/2026 (cycle_start=Jan/2026, globalWi=17)', () => {
 // Semana 3: Jun 28–Jul 4, globalWi=25 → GLOBAL_PATTERN_12[1] = '42h'
 //
 // Nota: semana 0 afetada pelo enforcement (4 semanas, ≈150h < cap=160h).
-// Semana 1: Dom Jun 14 bloqueado (Sáb Jun 13 19:00 → 12h rest) → skippedAny → 36h.
+// Semana 1: Fix #145 — Dom Jun 14 não bloqueado (próximo domingo é sempre uma nova semana) → 42h.
 // Semana 3 testada para verificar 42h limpo.
 
 describe('Jun/2026 — alto risco (cycle_start=Jan/2026, globalWi=23/25)', () => {
-  it('semana 1 (Jun 14–20) → 36h: Dom bloqueado (skippedAny) — 3×12h', async () => {
-    // Dom Jun 14 bloqueado por rest cross-week (Sáb Jun 13 19:00 → 12h < 24h).
-    // skippedAny=true → 3 plantões Seg–Sáb = 36h (fix #100).
+  it('semana 1 (Jun 14–20) → 42h: Fix #145 — Dom trabalhado (semana nova) — 3×12h + 1×6h', async () => {
+    // Fix #145: Dom Jun 14 não é bloqueado pelo rest cross-semana (Sáb Jun 13 19:00 → 12h).
+    // PO rule: próximo domingo é sempre uma nova semana → 4 plantões = 42h.
     const empId = await createDiurnoWorker('DIURNO Jun26 w1', 1, 2026);
     const entries = await generateAndGetEntries(6, 2026);
 
     const week = entriesInRange(entries, empId, '2026-06-14', '2026-06-20');
     const hours = weekHours(week);
 
-    expect(hours, 'Jun semana 1 = 36h (skippedAny)').toBe(36);
+    expect(hours, 'Jun semana 1 = 42h (Fix #145)').toBe(42);
 
     const workShifts = week.filter((e) => !e.is_day_off);
-    expect(workShifts.length, '3 plantões (Dom bloqueado)').toBe(3);
-    workShifts.forEach((e) => {
-      expect(e.duration_hours, 'plantão 12h').toBe(12);
-    });
+    expect(workShifts.length, '4 plantões em semana 42h DIURNO').toBe(4);
+    const sixHour = workShifts.filter((e) => e.duration_hours === 6);
+    expect(sixHour.length, '1 turno de 6h em semana 42h').toBe(1);
   });
 
   it('semana 3 (Jun 28–Jul 4) → 42h: 3×12h + 1×6h', async () => {
@@ -486,21 +483,21 @@ describe('Dez/2026 — alto risco (cycle_start=Jan/2026, globalWi=49/50)', () =>
     expect(sixHour.length, '1 turno de 6h em semana 42h').toBe(1);
   });
 
-  it('semana 2 (Dez 20–26) → 36h: Dom bloqueado (skippedAny) — 3×12h', async () => {
-    // globalWi=50 → GLOBAL_PATTERN_12[2] = '42h', mas Dom Dez 20 bloqueado
-    // (Sáb Dez 19 19:00 → Dom Dez 20 07:00 = 12h < 24h) → skippedAny → 36h (fix #100).
+  it('semana 2 (Dez 20–26) → 42h: Fix #145 — Dom trabalhado (semana nova) — 3×12h + 1×6h', async () => {
+    // Fix #145: globalWi=50 → GLOBAL_PATTERN_12[2] = '42h'. Dom Dez 20 não é bloqueado
+    // (Sáb Dez 19 19:00 → Dom Dez 20 07:00 = 12h) porque próximo domingo é sempre nova semana.
+    // PO rule: semana nova → sem restrição cross-week para Dom → 4 plantões = 42h.
     const empId = await createDiurnoWorker('DIURNO Dez26 w2', 1, 2026);
     const entries = await generateAndGetEntries(12, 2026);
 
     const week = entriesInRange(entries, empId, '2026-12-20', '2026-12-26');
     const hours = weekHours(week);
 
-    expect(hours, 'Dez semana 2 = 36h (skippedAny)').toBe(36);
+    expect(hours, 'Dez semana 2 = 42h (Fix #145)').toBe(42);
 
     const workShifts = week.filter((e) => !e.is_day_off);
-    expect(workShifts.length, '3 plantões (Dom bloqueado)').toBe(3);
-    workShifts.forEach((e) => {
-      expect(e.duration_hours, 'plantão 12h').toBe(12);
-    });
+    expect(workShifts.length, '4 plantões em semana 42h DIURNO').toBe(4);
+    const sixHour = workShifts.filter((e) => e.duration_hours === 6);
+    expect(sixHour.length, '1 turno de 6h em semana 42h').toBe(1);
   });
 });

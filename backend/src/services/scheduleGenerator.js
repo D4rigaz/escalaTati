@@ -617,7 +617,10 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
             // Fix #98B: verifica rest cross-semana antes de colocar o turno.
             // Sáb DIURNO (semana N) termina 19:00; Dom DIURNO (semana N+1) começa 07:00 = 12h < 24h.
             // Se o descanso for insuficiente e não for emendado válido, pula esta posição (vira folga).
-            if (lastShiftEnd) {
+            // Fix #145: PO rule — "próximo domingo é sempre uma nova semana". Para pi=0 (domingo
+            // de início de semana), o rest cross-semana não bloqueia: cada semana 42h parte do zero,
+            // garantindo que a meta de 42h seja sempre atingida no caminho isDiurno42h.
+            if (lastShiftEnd && pi > 0) {
               const shiftRef = (!skippedAny && pi === extraPositionIndex) ? (manhaShift || tardeShift) : preferredShift;
               if (shiftRef) {
                 const dStart = computeShiftStart(date, shiftRef);
