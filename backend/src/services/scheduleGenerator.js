@@ -887,9 +887,19 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
                       effectiveLastShiftEnd = computeShiftEnd(preceding.date, shiftMap[preceding.shift_type_id]);
                       effectiveLastShiftName = shiftMap[preceding.shift_type_id]?.name ?? null;
                       effectiveConsecutiveHours = shiftMap[preceding.shift_type_id]?.duration_hours ?? 0;
+                    } else {
+                      // Fix #146: nenhum turno colocado antes do candidato na semana atual.
+                      // selectedOff é sempre do freeInWeek corrente → candidato não é retroativo
+                      // entre semanas. Manter lastShiftEnd global bloquearia incorretamente quando
+                      // selectOffDays colocou trabalho no fim da semana (indices altos) e o recovery
+                      // tenta dias do início (índices baixos): lastShiftEnd aponta para o futuro,
+                      // rest = negativo → todos os candidatos rejeitados → meta semanal não atingida.
+                      // Com effectiveLastShiftEnd = null, rest = Infinity → selectShift passa;
+                      // hasAdequateRest abaixo verifica a restrição forward corretamente.
+                      effectiveLastShiftEnd = null;
+                      effectiveLastShiftName = null;
+                      effectiveConsecutiveHours = 0;
                     }
-                    // Se preceding === null: manter effectiveLastShiftEnd = lastShiftEnd global.
-                    // selectShift verá rest < 0 e rejeitará → candidato retroativo pulado corretamente.
                   }
                 }
               }
