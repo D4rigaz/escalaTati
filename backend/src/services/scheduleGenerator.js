@@ -1,4 +1,4 @@
-import { getDb, runTransaction } from '../db/database.js';
+import { query, transaction } from '../db/database.js';
 import { format } from 'date-fns';
 
 /**
@@ -123,14 +123,15 @@ export function getWeekLimitHours(isAdm, isNoturno, weekType) {
  * @param {string} weekEnd   - Data final   (yyyy-MM-dd, inclusive)
  * @returns {number}
  */
-function getWeeklyHours(db, employeeId, weekStart, weekEnd) {
-  const row = db.prepare(
+async function getWeeklyHours(queryFn, employeeId, weekStart, weekEnd) {
+  const { rows } = await queryFn(
     `SELECT COALESCE(SUM(st.duration_hours), 0) as total
      FROM schedule_entries se
      LEFT JOIN shift_types st ON se.shift_type_id = st.id
-     WHERE se.employee_id = ? AND se.date >= ? AND se.date <= ? AND se.is_day_off = 0`
-  ).get(employeeId, weekStart, weekEnd);
-  return row?.total ?? 0;
+     WHERE se.employee_id = $1 AND se.date >= $2 AND se.date <= $3 AND se.is_day_off = FALSE`,
+    [employeeId, weekStart, weekEnd]
+  );
+  return Number(rows[0]?.total ?? 0);
 }
 
 /**
@@ -142,13 +143,14 @@ function getWeeklyHours(db, employeeId, weekStart, weekEnd) {
  * @param {string} weekEnd
  * @returns {number}
  */
-function getWeeklyShiftCount(db, employeeId, weekStart, weekEnd) {
-  const row = db.prepare(
+async function getWeeklyShiftCount(queryFn, employeeId, weekStart, weekEnd) {
+  const { rows } = await queryFn(
     `SELECT COUNT(*) as total
      FROM schedule_entries se
-     WHERE se.employee_id = ? AND se.date >= ? AND se.date <= ? AND se.is_day_off = 0`
-  ).get(employeeId, weekStart, weekEnd);
-  return row?.total ?? 0;
+     WHERE se.employee_id = $1 AND se.date >= $2 AND se.date <= $3 AND se.is_day_off = FALSE`,
+    [employeeId, weekStart, weekEnd]
+  );
+  return Number(rows[0]?.total ?? 0);
 }
 
 /**
@@ -235,15 +237,17 @@ const MIN_DOM_SAB_WORKERS = 4; // para garantir MIN_DAILY_COVERAGE/dia incl. fin
  * Verifica se o elenco ativo atende à configuração mínima recomendada.
  * Retorna array de crew_warnings (vazio se tudo OK).
  */
-function checkCrewMinimum(db, shiftTypes) {
+async function checkCrewMinimum(shiftTypes) {
   const crew_warnings = [];
   const noturnoShift = shiftTypes.find((s) => s.name === SHIFT_NOTURNO_NAME);
 
-  const hemoCount = db.prepare(
+  const { rows: hemoRows } = await query(
     `SELECT COUNT(DISTINCT e.id) as c FROM employees e
      JOIN employee_sectors es ON es.employee_id = e.id
-     WHERE e.active = 1 AND es.setor = ?`
-  ).get(SETOR_HEMO).c;
+     WHERE e.active = TRUE AND es.setor = $1`,
+    [SETOR_HEMO]
+  );
+  const hemoCount = Number(hemoRows[0]?.c ?? 0);
 
   if (hemoCount < MIN_HEMO_WORKERS) {
     crew_warnings.push({
@@ -252,14 +256,17 @@ function checkCrewMinimum(db, shiftTypes) {
     });
   }
 
-  const ambNoturnoCount = noturnoShift
-    ? db.prepare(
-        `SELECT COUNT(DISTINCT e.id) as c FROM employees e
-         JOIN employee_sectors es ON es.employee_id = e.id
-         LEFT JOIN employee_rest_rules r ON r.employee_id = e.id
-         WHERE e.active = 1 AND es.setor = ? AND r.preferred_shift_id = ?`
-      ).get(SETOR_AMBUL, noturnoShift.id).c
-    : 0;
+  let ambNoturnoCount = 0;
+  if (noturnoShift) {
+    const { rows: ambRows } = await query(
+      `SELECT COUNT(DISTINCT e.id) as c FROM employees e
+       JOIN employee_sectors es ON es.employee_id = e.id
+       LEFT JOIN employee_rest_rules r ON r.employee_id = e.id
+       WHERE e.active = TRUE AND es.setor = $1 AND r.preferred_shift_id = $2`,
+      [SETOR_AMBUL, noturnoShift.id]
+    );
+    ambNoturnoCount = Number(ambRows[0]?.c ?? 0);
+  }
 
   if (ambNoturnoCount < MIN_AMB_NOTURNO) {
     crew_warnings.push({
@@ -268,9 +275,10 @@ function checkCrewMinimum(db, shiftTypes) {
     });
   }
 
-  const domSabCount = db.prepare(
-    `SELECT COUNT(*) as c FROM employees WHERE active = 1 AND work_schedule != 'seg_sex'`
-  ).get().c;
+  const { rows: domSabRows } = await query(
+    `SELECT COUNT(*) as c FROM employees WHERE active = TRUE AND work_schedule != 'seg_sex'`
+  );
+  const domSabCount = Number(domSabRows[0]?.c ?? 0);
 
   if (domSabCount < MIN_DOM_SAB_WORKERS) {
     crew_warnings.push({
@@ -287,10 +295,8 @@ function checkCrewMinimum(db, shiftTypes) {
  * Target: 160h/month per employee
  */
 export async function generateSchedule({ month, year, overwriteLocked = false }) {
-  const db = getDb();
-
-  const employees = db.prepare('SELECT * FROM employees WHERE active = 1').all();
-  const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+  const employees = (await query('SELECT * FROM employees WHERE active = TRUE')).rows;
+  const shiftTypes = (await query('SELECT * FROM shift_types')).rows;
   const shiftMap = {};
   for (const s of shiftTypes) shiftMap[s.id] = s;
 
@@ -310,7 +316,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   const employeeIds = employees.map((e) => e.id);
   const employeeSectorsMap = {};
   if (employeeIds.length > 0) {
-    const allSectors = db.prepare('SELECT employee_id, setor FROM employee_sectors').all();
+    const allSectors = (await query('SELECT employee_id, setor FROM employee_sectors')).rows;
     for (const s of allSectors) {
       if (!employeeSectorsMap[s.employee_id]) employeeSectorsMap[s.employee_id] = [];
       employeeSectorsMap[s.employee_id].push(s.setor);
@@ -323,9 +329,7 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   // Load vacation dates: Set of "employeeId:YYYY-MM-DD"
   const allVacationDates = new Set();
   if (employeeIds.length > 0) {
-    const vacRows = db
-      .prepare('SELECT employee_id, start_date, end_date FROM employee_vacations')
-      .all();
+    const vacRows = (await query('SELECT employee_id, start_date, end_date FROM employee_vacations')).rows;
     for (const v of vacRows) {
       let cursor = v.start_date;
       while (cursor <= v.end_date) {
@@ -336,14 +340,14 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
     }
   }
 
-  const crew_warnings = checkCrewMinimum(db, shiftTypes);
+  const crew_warnings = await checkCrewMinimum(shiftTypes);
   const warnings = [];
   const results = [];
 
   for (const employee of employees) {
-    const result = runTransaction(() => {
+    const result = await transaction(async (client) => {
       return generateForEmployee(
-        db, employee, shiftTypes, shiftMap, dates,
+        client, employee, shiftTypes, shiftMap, dates,
         overwriteLocked, warnings, allVacationDates, month, year
       );
     });
@@ -352,42 +356,43 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
 
   // Post-generation coverage checks (Rules 16, 19, 21, 22)
   if (diurnoShift) {
-    enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings);
+    await enforceDiurnoCoverage(employees, employeeSectorsMap, dates, diurnoShift, warnings);
   }
   if (noturnoShift) {
-    enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings);
+    await enforceNocturnalCoverage(employees, employeeSectorsMap, dates, noturnoShift, warnings);
   }
-  enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings);
+  await enforceDailyCoverage(employees, employeeSectorsMap, shiftTypes, dates, warnings);
 
   // Log generation
-  db.prepare(
-    'INSERT INTO schedule_generations (month, year, params_json) VALUES (?, ?, ?)'
-  ).run(month, year, JSON.stringify({ overwriteLocked, employeeCount: employees.length, warnings, results }));
+  await query(
+    'INSERT INTO schedule_generations (month, year, params_json) VALUES ($1, $2, $3)',
+    [month, year, JSON.stringify({ overwriteLocked, employeeCount: employees.length, warnings, results })]
+  );
 
   return { results, warnings, crew_warnings };
 }
 
-function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth, genYear) {
-  const rules = db
-    .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
-    .get(employee.id) || { min_rest_hours: MIN_REST_HOURS, preferred_shift_id: null };
+async function generateForEmployee(client, employee, shiftTypes, shiftMap, dates, overwriteLocked, warnings, allVacationDates, genMonth, genYear) {
+  const qfn = (sql, params) => client.query(sql, params);
+
+  const { rows: rulesRows } = await qfn('SELECT * FROM employee_rest_rules WHERE employee_id = $1', [employee.id]);
+  const rules = rulesRows[0] || { min_rest_hours: MIN_REST_HOURS, preferred_shift_id: null };
 
   // Load existing locked entries
-  const lockedEntries = db
-    .prepare(
-      'SELECT * FROM schedule_entries WHERE employee_id = ? AND date >= ? AND date <= ? AND is_locked = 1'
-    )
-    .all(employee.id, dates[0], dates[dates.length - 1]);
+  const { rows: lockedEntries } = await qfn(
+    'SELECT * FROM schedule_entries WHERE employee_id = $1 AND date >= $2 AND date <= $3 AND is_locked = TRUE',
+    [employee.id, dates[0], dates[dates.length - 1]]
+  );
 
   const lockedDates = new Set(lockedEntries.map((e) => e.date));
 
   // Clear entries
   if (overwriteLocked) {
-    db.prepare('DELETE FROM schedule_entries WHERE employee_id = ? AND date >= ? AND date <= ?')
-      .run(employee.id, dates[0], dates[dates.length - 1]);
+    await qfn('DELETE FROM schedule_entries WHERE employee_id = $1 AND date >= $2 AND date <= $3',
+      [employee.id, dates[0], dates[dates.length - 1]]);
   } else {
-    db.prepare('DELETE FROM schedule_entries WHERE employee_id = ? AND date >= ? AND date <= ? AND is_locked = 0')
-      .run(employee.id, dates[0], dates[dates.length - 1]);
+    await qfn('DELETE FROM schedule_entries WHERE employee_id = $1 AND date >= $2 AND date <= $3 AND is_locked = FALSE',
+      [employee.id, dates[0], dates[dates.length - 1]]);
   }
 
   const setores = employee.setores || [];
@@ -1090,13 +1095,17 @@ function generateForEmployee(db, employee, shiftTypes, shiftMap, dates, overwrit
   );
 
   // Persist
-  const insertEntry = db.prepare(
-    `INSERT OR REPLACE INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked, notes)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  );
-
   for (const entry of corrected) {
-    insertEntry.run(entry.employee_id, entry.shift_type_id, entry.date, entry.is_day_off, entry.is_locked, entry.notes ?? null);
+    await qfn(
+      `INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked, notes)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (employee_id, date) DO UPDATE SET
+         shift_type_id = EXCLUDED.shift_type_id,
+         is_day_off = EXCLUDED.is_day_off,
+         is_locked = EXCLUDED.is_locked,
+         notes = EXCLUDED.notes`,
+      [entry.employee_id, entry.shift_type_id, entry.date, entry.is_day_off, entry.is_locked, entry.notes ?? null]
+    );
   }
 
   const finalHours = corrected.reduce((sum, e) => {
@@ -1179,16 +1188,18 @@ function selectShift(shiftTypes, preferredShift, lastShiftEnd, lastShiftName, co
  * without violating the 24h minimum rest rule or emendado restrictions.
  * Returns true if safe to assign, false otherwise.
  */
-function canAssignShift(db, employeeId, date, shift) {
+async function canAssignShift(queryFn, employeeId, date, shift) {
   // Find the previous work entry before this date
-  const prevEntry = db.prepare(
+  const { rows: prevRows } = await queryFn(
     `SELECT se.is_day_off, se.date as prev_date,
             st.name as shift_name, st.start_time, st.duration_hours
      FROM schedule_entries se
      LEFT JOIN shift_types st ON se.shift_type_id = st.id
-     WHERE se.employee_id = ? AND se.date < ? AND se.is_day_off = 0
-     ORDER BY se.date DESC LIMIT 1`
-  ).get(employeeId, date);
+     WHERE se.employee_id = $1 AND se.date < $2 AND se.is_day_off = FALSE
+     ORDER BY se.date DESC LIMIT 1`,
+    [employeeId, date]
+  );
+  const prevEntry = prevRows[0];
 
   if (prevEntry && prevEntry.start_time && prevEntry.duration_hours) {
     const prevEnd = computeShiftEnd(prevEntry.prev_date, prevEntry);
@@ -1208,14 +1219,16 @@ function canAssignShift(db, employeeId, date, shift) {
   }
 
   // Also check next work entry after this date (to avoid pushing into < 24h rest)
-  const nextEntry = db.prepare(
+  const { rows: nextRows } = await queryFn(
     `SELECT se.is_day_off, se.date as next_date,
             st.name as shift_name, st.start_time, st.duration_hours
      FROM schedule_entries se
      LEFT JOIN shift_types st ON se.shift_type_id = st.id
-     WHERE se.employee_id = ? AND se.date > ? AND se.is_day_off = 0
-     ORDER BY se.date ASC LIMIT 1`
-  ).get(employeeId, date);
+     WHERE se.employee_id = $1 AND se.date > $2 AND se.is_day_off = FALSE
+     ORDER BY se.date ASC LIMIT 1`,
+    [employeeId, date]
+  );
+  const nextEntry = nextRows[0];
 
   if (nextEntry && nextEntry.start_time && nextEntry.duration_hours) {
     const newEnd = computeShiftEnd(date, shift);
@@ -1295,14 +1308,15 @@ const COVERAGE_HOURS_CAP = TARGET_HOURS;
 /**
  * Returns the current total worked hours for an employee in the month dates range.
  */
-function getEmployeeHours(db, employeeId, startDate, endDate) {
-  const row = db.prepare(
+async function getEmployeeHours(queryFn, employeeId, startDate, endDate) {
+  const { rows } = await queryFn(
     `SELECT COALESCE(SUM(st.duration_hours), 0) as total
      FROM schedule_entries se
      LEFT JOIN shift_types st ON se.shift_type_id = st.id
-     WHERE se.employee_id = ? AND se.date >= ? AND se.date <= ? AND se.is_day_off = 0`
-  ).get(employeeId, startDate, endDate);
-  return row?.total ?? 0;
+     WHERE se.employee_id = $1 AND se.date >= $2 AND se.date <= $3 AND se.is_day_off = FALSE`,
+    [employeeId, startDate, endDate]
+  );
+  return Number(rows[0]?.total ?? 0);
 }
 
 /**
@@ -1311,7 +1325,7 @@ function getEmployeeHours(db, employeeId, startDate, endDate) {
  * Converte folgas (não bloqueadas) dos motoristas elegíveis se necessário,
  * respeitando o limite semanal CLT de cada motorista.
  */
-function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoShift, warnings) {
+async function enforceDiurnoCoverage(employees, employeeSectorsMap, dates, diurnoShift, warnings) {
   const startDate = dates[0];
   const endDate = dates[dates.length - 1];
 
@@ -1342,7 +1356,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
    * ultrapassaria o limite semanal CLT do motorista.
    * Retorna true se for SEGURO converter (limite não excedido); false caso contrário.
    */
-  function withinWeeklyLimit(emp, date, shift) {
+  async function withinWeeklyLimit(emp, date, shift) {
     const bounds = getWeekBounds(date);
     if (!bounds) return true; // sem contexto de semana — permite por segurança
 
@@ -1365,11 +1379,11 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
     if (cltLimit.type === 'shifts') {
-      const currentShifts = getWeeklyShiftCount(db, emp.id, bounds.weekStart, bounds.weekEnd);
+      const currentShifts = await getWeeklyShiftCount(query, emp.id, bounds.weekStart, bounds.weekEnd);
       return currentShifts < cltLimit.limit;
     }
     // type === 'hours'
-    const currentWeekHours = getWeeklyHours(db, emp.id, bounds.weekStart, bounds.weekEnd);
+    const currentWeekHours = await getWeeklyHours(query, emp.id, bounds.weekStart, bounds.weekEnd);
     return (currentWeekHours + shift.duration_hours) <= cltLimit.limit;
   }
 
@@ -1377,13 +1391,14 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
     const dow = new Date(date + 'T12:00:00').getDay();
     if (dow === 0) continue; // skip Sunday
 
-    const entries = db.prepare(
+    const { rows: entries } = await query(
       `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.shift_type_id, se.notes,
               st.name as shift_name
        FROM schedule_entries se
        LEFT JOIN shift_types st ON se.shift_type_id = st.id
-       WHERE se.date = ?`
-    ).all(date);
+       WHERE se.date = $1`,
+      [date]
+    );
 
     const entryByEmp = {};
     for (const e of entries) entryByEmp[e.employee_id] = e;
@@ -1412,12 +1427,13 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
-        if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-        if (!withinWeeklyLimit(emp, date, diurnoShift)) continue;
-        db.prepare(
-          'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
-        ).run(diurnoShift.id, entry.id);
+        if (!await canAssignShift(query, emp.id, date, diurnoShift)) continue;
+        if (await getEmployeeHours(query, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (!await withinWeeklyLimit(emp, date, diurnoShift)) continue;
+        await query(
+          'UPDATE schedule_entries SET is_day_off = FALSE, shift_type_id = $1 WHERE id = $2',
+          [diurnoShift.id, entry.id]
+        );
         entry.is_day_off = 0;
         entry.shift_name = SHIFT_DIURNO_NAME;
         entry.shift_type_id = diurnoShift.id;
@@ -1456,12 +1472,13 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
         if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
-        if (!canAssignShift(db, emp.id, date, diurnoShift)) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-        if (!withinWeeklyLimit(emp, date, diurnoShift)) continue;
-        db.prepare(
-          'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
-        ).run(diurnoShift.id, entry.id);
+        if (!await canAssignShift(query, emp.id, date, diurnoShift)) continue;
+        if (await getEmployeeHours(query, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (!await withinWeeklyLimit(emp, date, diurnoShift)) continue;
+        await query(
+          'UPDATE schedule_entries SET is_day_off = FALSE, shift_type_id = $1 WHERE id = $2',
+          [diurnoShift.id, entry.id]
+        );
         entry.is_day_off = 0;
         entry.shift_name = SHIFT_DIURNO_NAME;
         entry.shift_type_id = diurnoShift.id;
@@ -1486,7 +1503,7 @@ function enforceDiurnoCoverage(db, employees, employeeSectorsMap, dates, diurnoS
  * Seg/Qua/Sex (dow 1,3,5): ≥1 motorista Ambulância no Noturno.
  * Respeita o limite semanal CLT de cada motorista.
  */
-function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, noturnoShift, warnings) {
+async function enforceNocturnalCoverage(employees, employeeSectorsMap, dates, noturnoShift, warnings) {
   const startDate = dates[0];
   const endDate = dates[dates.length - 1];
 
@@ -1505,15 +1522,14 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
   // Bug #87: enforceNocturnalCoverage não verificava preferred_shift antes de converter.
   const preferredShiftNameByEmp = {};
   for (const emp of employees) {
-    const row = db
-      .prepare(
-        `SELECT st.name as shift_name
-         FROM employee_rest_rules err
-         LEFT JOIN shift_types st ON err.preferred_shift_id = st.id
-         WHERE err.employee_id = ?`
-      )
-      .get(emp.id);
-    preferredShiftNameByEmp[emp.id] = row?.shift_name ?? null;
+    const { rows: psnRows } = await query(
+      `SELECT st.name as shift_name
+       FROM employee_rest_rules err
+       LEFT JOIN shift_types st ON err.preferred_shift_id = st.id
+       WHERE err.employee_id = $1`,
+      [emp.id]
+    );
+    preferredShiftNameByEmp[emp.id] = psnRows[0]?.shift_name ?? null;
   }
 
   /**
@@ -1530,7 +1546,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
    * ultrapassaria o limite semanal CLT do motorista.
    * Para noturno enforcement: o motorista tem turno noturno, isNoturno=true.
    */
-  function withinWeeklyLimit(emp, date, shift) {
+  async function withinWeeklyLimit(emp, date, shift) {
     const bounds = getWeekBounds(date);
     if (!bounds) return true;
 
@@ -1552,11 +1568,11 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
     if (cltLimit.type === 'shifts') {
-      const currentShifts = getWeeklyShiftCount(db, emp.id, bounds.weekStart, bounds.weekEnd);
+      const currentShifts = await getWeeklyShiftCount(query, emp.id, bounds.weekStart, bounds.weekEnd);
       return currentShifts < cltLimit.limit;
     }
     // type === 'hours'
-    const currentWeekHours = getWeeklyHours(db, emp.id, bounds.weekStart, bounds.weekEnd);
+    const currentWeekHours = await getWeeklyHours(query, emp.id, bounds.weekStart, bounds.weekEnd);
     return (currentWeekHours + shift.duration_hours) <= cltLimit.limit;
   }
 
@@ -1565,13 +1581,14 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
     const required = [2, 4, 6].includes(dow) ? 2 : [1, 3, 5].includes(dow) ? 1 : 0;
     if (required === 0) continue;
 
-    const entries = db.prepare(
+    const { rows: entries } = await query(
       `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.notes,
               st.name as shift_name
        FROM schedule_entries se
        LEFT JOIN shift_types st ON se.shift_type_id = st.id
-       WHERE se.date = ?`
-    ).all(date);
+       WHERE se.date = $1`,
+      [date]
+    );
 
     const entryByEmp = {};
     for (const e of entries) entryByEmp[e.employee_id] = e;
@@ -1600,12 +1617,13 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
         if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
-        if (!canAssignShift(db, emp.id, date, noturnoShift)) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-        if (!withinWeeklyLimit(emp, date, noturnoShift)) continue;
-        db.prepare(
-          'UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?'
-        ).run(noturnoShift.id, entry.id);
+        if (!await canAssignShift(query, emp.id, date, noturnoShift)) continue;
+        if (await getEmployeeHours(query, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        if (!await withinWeeklyLimit(emp, date, noturnoShift)) continue;
+        await query(
+          'UPDATE schedule_entries SET is_day_off = FALSE, shift_type_id = $1 WHERE id = $2',
+          [noturnoShift.id, entry.id]
+        );
         entry.is_day_off = 0;
         entry.shift_name = SHIFT_NOTURNO_NAME;
         entry.shift_type_id = noturnoShift.id;
@@ -1639,7 +1657,7 @@ function enforceNocturnalCoverage(db, employees, employeeSectorsMap, dates, notu
  * Emite sem_motorista (filled=0) ou cobertura_minima_insuficiente (filled>0 mas <MIN)
  *   quando não há candidatos disponíveis.
  */
-export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTypes, dates, warnings) {
+export async function enforceDailyCoverage(employees, employeeSectorsMap, shiftTypes, dates, warnings) {
   const defaultShift =
     shiftTypes.find((s) => s.duration_hours === DEFAULT_SHIFT_HOURS) || shiftTypes[0];
 
@@ -1661,11 +1679,13 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
 
   // Cache preferred shift por employee_id (definido antes de withinWeeklyLimit que o referencia)
   const preferredShiftCache = {};
-  const getShiftForEmp = (emp) => {
+  const getShiftForEmp = async (emp) => {
     if (preferredShiftCache[emp.id] !== undefined) return preferredShiftCache[emp.id];
-    const rules = db
-      .prepare('SELECT preferred_shift_id FROM employee_rest_rules WHERE employee_id = ?')
-      .get(emp.id);
+    const { rows: ruleRows } = await query(
+      'SELECT preferred_shift_id FROM employee_rest_rules WHERE employee_id = $1',
+      [emp.id]
+    );
+    const rules = ruleRows[0];
     if (rules?.preferred_shift_id) {
       const s = shiftTypes.find((sh) => sh.id === rules.preferred_shift_id);
       if (s) { preferredShiftCache[emp.id] = s; return s; }
@@ -1695,14 +1715,14 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
    * ultrapassaria o limite semanal CLT do motorista.
    * Retorna true se for SEGURO converter (limite não excedido); false caso contrário.
    */
-  function withinWeeklyLimit(emp, date, shift) {
+  async function withinWeeklyLimit(emp, date, shift) {
     const bounds = getWeekBounds(date);
     if (!bounds) return true;
 
     const setores = employeeSectorsMap[emp.id] || [];
     const isAdm = setores.includes(SETOR_ADM);
     // Usa o turno preferido para determinar isNoturno
-    const empShift = getShiftForEmp(emp);
+    const empShift = await getShiftForEmp(emp);
     const isNoturno = !isAdm && empShift?.name === SHIFT_NOTURNO_NAME;
 
     // Fix #127: usar índice global baseado no cycle_start do funcionário.
@@ -1719,22 +1739,22 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
     const cltLimit = getWeekLimitHours(isAdm, isNoturno, weekType);
 
     if (cltLimit.type === 'shifts') {
-      const currentShifts = getWeeklyShiftCount(db, emp.id, bounds.weekStart, bounds.weekEnd);
+      const currentShifts = await getWeeklyShiftCount(query, emp.id, bounds.weekStart, bounds.weekEnd);
       return currentShifts < cltLimit.limit;
     }
     // type === 'hours'
-    const currentWeekHours = getWeeklyHours(db, emp.id, bounds.weekStart, bounds.weekEnd);
+    const currentWeekHours = await getWeeklyHours(query, emp.id, bounds.weekStart, bounds.weekEnd);
     return (currentWeekHours + shift.duration_hours) <= cltLimit.limit;
   }
 
   for (const date of dates) {
-    const initialCount = db
-      .prepare(
-        `SELECT COUNT(*) as c FROM schedule_entries
-         WHERE date = ? AND is_day_off = 0
-           AND employee_id IN (SELECT id FROM employees WHERE active = 1)`
-      )
-      .get(date).c;
+    const { rows: countRows } = await query(
+      `SELECT COUNT(*) as c FROM schedule_entries
+       WHERE date = $1 AND is_day_off = FALSE
+         AND employee_id IN (SELECT id FROM employees WHERE active = TRUE)`,
+      [date]
+    );
+    const initialCount = Number(countRows[0]?.c ?? 0);
     if (initialCount >= MIN_DAILY_COVERAGE) continue;
 
     const dow = new Date(date + 'T12:00:00').getDay();
@@ -1744,14 +1764,13 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
 
     while (filled < MIN_DAILY_COVERAGE) {
       // Re-busca folgas a cada iteração — candidatos mudam após cada atribuição
-      const folgas = db
-        .prepare(
-          `SELECT se.id, se.employee_id FROM schedule_entries se
-           WHERE se.date = ? AND se.is_day_off = 1 AND se.is_locked = 0
-             AND (se.notes IS NULL OR se.notes != 'Férias')
-             AND se.employee_id IN (SELECT id FROM employees WHERE active = 1)`
-        )
-        .all(date);
+      const { rows: folgas } = await query(
+        `SELECT se.id, se.employee_id FROM schedule_entries se
+         WHERE se.date = $1 AND se.is_day_off = TRUE AND se.is_locked = FALSE
+           AND (se.notes IS NULL OR se.notes != 'Férias')
+           AND se.employee_id IN (SELECT id FROM employees WHERE active = TRUE)`,
+        [date]
+      );
 
       if (folgas.length === 0) {
         if (filled === 0) {
@@ -1767,17 +1786,17 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       }
 
       // Ordena candidatos por mais dias desde o último trabalho (mais descansado primeiro)
-      const candidates = folgas
-        .map((f) => {
+      const candidates = (await Promise.all(
+        folgas.map(async (f) => {
           const emp = employees.find((e) => e.id === f.employee_id);
           if (!emp) return null;
-          const lastWork = db
-            .prepare(
-              `SELECT date FROM schedule_entries
-               WHERE employee_id = ? AND date < ? AND is_day_off = 0
-               ORDER BY date DESC LIMIT 1`
-            )
-            .get(emp.id, date);
+          const { rows: lwRows } = await query(
+            `SELECT date FROM schedule_entries
+             WHERE employee_id = $1 AND date < $2 AND is_day_off = FALSE
+             ORDER BY date DESC LIMIT 1`,
+            [emp.id, date]
+          );
+          const lastWork = lwRows[0];
           const daysSince = lastWork
             ? Math.round(
                 (new Date(date + 'T12:00:00Z') - new Date(lastWork.date + 'T12:00:00Z')) /
@@ -1786,8 +1805,7 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
             : 999;
           return { folgaId: f.id, emp, daysSince };
         })
-        .filter(Boolean)
-        .sort((a, b) => b.daysSince - a.daysSince);
+      )).filter(Boolean).sort((a, b) => b.daysSince - a.daysSince);
 
       const isSecond = filled > 0;
 
@@ -1795,12 +1813,14 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       let assigned = false;
       for (const { folgaId, emp } of candidates) {
         if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-        const shift = getShiftForEmp(emp);
-        if (!canAssignShift(db, emp.id, date, shift)) continue;
-        if (!withinWeeklyLimit(emp, date, shift)) continue;
-        db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
-          .run(shift.id, folgaId);
+        if (await getEmployeeHours(query, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        const shift = await getShiftForEmp(emp);
+        if (!await canAssignShift(query, emp.id, date, shift)) continue;
+        if (!await withinWeeklyLimit(emp, date, shift)) continue;
+        await query(
+          'UPDATE schedule_entries SET is_day_off = FALSE, shift_type_id = $1 WHERE id = $2',
+          [shift.id, folgaId]
+        );
         filled++;
         assigned = true;
         break;
@@ -1812,10 +1832,12 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       let forced = false;
       for (const { folgaId, emp } of candidates) {
         if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
-        const shift = getShiftForEmp(emp);
-        if (!withinWeeklyLimit(emp, date, shift)) continue;
-        db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
-          .run(shift.id, folgaId);
+        const shift = await getShiftForEmp(emp);
+        if (!await withinWeeklyLimit(emp, date, shift)) continue;
+        await query(
+          'UPDATE schedule_entries SET is_day_off = FALSE, shift_type_id = $1 WHERE id = $2',
+          [shift.id, folgaId]
+        );
         warnings.push({
           type: isSecond ? 'segundo_motorista_forcado' : 'sem_motorista_forcado',
           date,
@@ -1833,11 +1855,13 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       // Passo 3 (emergência): força candidato seg_sex em Sáb/Dom — equipe insuficiente de dom_sab
       // Ainda respeita cap e limite CLT semanal (cap restaurado: evita seg_sex acima de 160h no Domingo).
       for (const { folgaId, emp } of candidates) {
-        if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-        const shift = getShiftForEmp(emp);
-        if (!withinWeeklyLimit(emp, date, shift)) continue;
-        db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
-          .run(shift.id, folgaId);
+        if (await getEmployeeHours(query, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
+        const shift = await getShiftForEmp(emp);
+        if (!await withinWeeklyLimit(emp, date, shift)) continue;
+        await query(
+          'UPDATE schedule_entries SET is_day_off = FALSE, shift_type_id = $1 WHERE id = $2',
+          [shift.id, folgaId]
+        );
         warnings.push({
           type: 'sem_motorista_forcado_seg_sex',
           date,
@@ -1853,17 +1877,21 @@ export function enforceDailyCoverage(db, employees, employeeSectorsMap, shiftTyp
       // Seleciona o candidato com menor carga mensal para minimizar sobrecarga.
       // Ainda respeita a restrição seg_sex em fins de semana — apenas dom_sab pode ser forçado aqui.
       if (!forced) {
-        const byHours = [...candidates].sort(
-          (a, b) =>
-            getEmployeeHours(db, a.emp.id, startDate, endDate) -
-            getEmployeeHours(db, b.emp.id, startDate, endDate)
+        const hoursArr = await Promise.all(
+          candidates.map(async (c) => ({
+            ...c,
+            hrs: await getEmployeeHours(query, c.emp.id, startDate, endDate),
+          }))
         );
-        for (const { folgaId, emp } of byHours) {
+        const byHours = hoursArr.sort((a, b) => a.hrs - b.hrs);
+        for (const { folgaId, emp, hrs } of byHours) {
           if (emp.work_schedule === 'seg_sex' && isWeekend) continue;
-          if (getEmployeeHours(db, emp.id, startDate, endDate) >= COVERAGE_HOURS_CAP) continue;
-          const shift = getShiftForEmp(emp);
-          db.prepare('UPDATE schedule_entries SET is_day_off = 0, shift_type_id = ? WHERE id = ?')
-            .run(shift.id, folgaId);
+          if (hrs >= COVERAGE_HOURS_CAP) continue;
+          const shift = await getShiftForEmp(emp);
+          await query(
+            'UPDATE schedule_entries SET is_day_off = FALSE, shift_type_id = $1 WHERE id = $2',
+            [shift.id, folgaId]
+          );
           warnings.push({
             type: 'clt_weekly_overflow',
             date,

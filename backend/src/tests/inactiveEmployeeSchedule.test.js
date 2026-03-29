@@ -14,25 +14,26 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
 import { freshDb, createEmployee } from './helpers.js';
+import { query } from '../db/database.js';
 
 const MONTH = { month: 4, year: 2026 };
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Suíte 1: GET /api/schedules filtra active=0 ──────────────────────────────
 
 describe('GET /api/schedules — funcionários inativos excluídos da resposta', () => {
   it('entries de funcionário inativado não aparecem no GET /api/schedules', async () => {
-    const db = freshDb();
-    const ativo = createEmployee(db, { name: 'Ativo' });
-    const inativo = createEmployee(db, { name: 'Inativo' });
+    await freshDb();
+    const ativo = await createEmployee(null, { name: 'Ativo' });
+    const inativo = await createEmployee(null, { name: 'Inativo' });
 
     // Gerar escala com ambos ativos
     const gen = await request(app).post('/api/schedules/generate').send(MONTH);
     expect(gen.status).toBe(200);
 
     // Inativar funcionário
-    db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(inativo.id);
+    await query('UPDATE employees SET active = FALSE WHERE id = $1', [inativo.id]);
 
     // GET /api/schedules não deve retornar entries do inativo
     const res = await request(app).get('/api/schedules?month=4&year=2026');
@@ -44,12 +45,12 @@ describe('GET /api/schedules — funcionários inativos excluídos da resposta',
   });
 
   it('totals não incluem funcionário inativado', async () => {
-    const db = freshDb();
-    const ativo = createEmployee(db, { name: 'Ativo' });
-    const inativo = createEmployee(db, { name: 'Inativo' });
+    await freshDb();
+    const ativo = await createEmployee(null, { name: 'Ativo' });
+    const inativo = await createEmployee(null, { name: 'Inativo' });
 
     await request(app).post('/api/schedules/generate').send(MONTH);
-    db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(inativo.id);
+    await query('UPDATE employees SET active = FALSE WHERE id = $1', [inativo.id]);
 
     const res = await request(app).get('/api/schedules?month=4&year=2026');
     expect(res.status).toBe(200);
@@ -60,24 +61,20 @@ describe('GET /api/schedules — funcionários inativos excluídos da resposta',
   });
 
   it('entries do inativo permanecem no banco (soft delete — dados preservados)', async () => {
-    const db = freshDb();
-    const inativo = createEmployee(db, { name: 'Inativo' });
+    await freshDb();
+    const inativo = await createEmployee(null, { name: 'Inativo' });
 
     await request(app).post('/api/schedules/generate').send(MONTH);
 
     // Confirmar que entries existem antes de inativar
-    const antes = db
-      .prepare('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = ?')
-      .get(inativo.id);
-    expect(antes.n).toBeGreaterThan(0);
+    const antes = (await query('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = $1', [inativo.id])).rows[0];
+    expect(Number(antes.n)).toBeGreaterThan(0);
 
-    db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(inativo.id);
+    await query('UPDATE employees SET active = FALSE WHERE id = $1', [inativo.id]);
 
     // Entries ainda existem no banco após inativação
-    const depois = db
-      .prepare('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = ?')
-      .get(inativo.id);
-    expect(depois.n).toBe(antes.n);
+    const depois = (await query('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = $1', [inativo.id])).rows[0];
+    expect(Number(depois.n)).toBe(Number(antes.n));
   });
 });
 
@@ -85,28 +82,24 @@ describe('GET /api/schedules — funcionários inativos excluídos da resposta',
 
 describe('generateSchedule — funcionário inativado não reaparece após regeneração', () => {
   it('regenerar o mês não cria novas entries para funcionário inativo', async () => {
-    const db = freshDb();
-    const ativo = createEmployee(db, { name: 'Ativo' });
-    const inativo = createEmployee(db, { name: 'Inativo' });
+    await freshDb();
+    const ativo = await createEmployee(null, { name: 'Ativo' });
+    const inativo = await createEmployee(null, { name: 'Inativo' });
 
     // Primeira geração com ambos
     await request(app).post('/api/schedules/generate').send(MONTH);
 
-    const entriesAntes = db
-      .prepare('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = ?')
-      .get(inativo.id).n;
+    const entriesAntes = Number((await query('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = $1', [inativo.id])).rows[0].n);
 
     // Inativar e regenerar
-    db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(inativo.id);
+    await query('UPDATE employees SET active = FALSE WHERE id = $1', [inativo.id]);
     const regen = await request(app)
       .post('/api/schedules/generate')
       .send({ ...MONTH, overwriteLocked: true });
     expect(regen.status).toBe(200);
 
     // Entries do inativo não devem ter aumentado
-    const entriesDepois = db
-      .prepare('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = ?')
-      .get(inativo.id).n;
+    const entriesDepois = Number((await query('SELECT COUNT(*) as n FROM schedule_entries WHERE employee_id = $1', [inativo.id])).rows[0].n);
     expect(entriesDepois).toBe(entriesAntes);
 
     // GET não retorna entries do inativo
@@ -117,12 +110,12 @@ describe('generateSchedule — funcionário inativado não reaparece após regen
   });
 
   it('funcionário nunca ativo não aparece em GET /api/schedules', async () => {
-    const db = freshDb();
-    const ativo = createEmployee(db, { name: 'Ativo' });
-    const nunca = createEmployee(db, { name: 'Nunca Ativo' });
+    await freshDb();
+    const ativo = await createEmployee(null, { name: 'Ativo' });
+    const nunca = await createEmployee(null, { name: 'Nunca Ativo' });
 
     // Inativar antes da primeira geração
-    db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(nunca.id);
+    await query('UPDATE employees SET active = FALSE WHERE id = $1', [nunca.id]);
 
     await request(app).post('/api/schedules/generate').send(MONTH);
 

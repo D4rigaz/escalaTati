@@ -12,7 +12,7 @@ import request from 'supertest';
 import app from '../app.js';
 import { freshDb } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 const SHIFT_NOTURNO_ID = 2;
 const SHIFT_DIURNO_ID  = 1;

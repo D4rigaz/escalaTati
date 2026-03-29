@@ -31,6 +31,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { query } from '../db/database.js';
 import { freshDb, createEmployee, shiftId } from './helpers.js';
 import { generateSchedule } from '../services/scheduleGenerator.js';
 
@@ -42,7 +43,7 @@ const WEEK1 = ['2026-04-12','2026-04-13','2026-04-14','2026-04-15','2026-04-16',
 const WEEK2 = ['2026-04-19','2026-04-20','2026-04-21','2026-04-22','2026-04-23','2026-04-24','2026-04-25'];
 const WEEK3 = ['2026-04-26','2026-04-27','2026-04-28','2026-04-29','2026-04-30','2026-05-01','2026-05-02'];
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 function weeklyHours(entries, empId, weekDates) {
   return entries
@@ -51,80 +52,78 @@ function weeklyHours(entries, empId, weekDates) {
 }
 
 // Helper: gera e lê entries do DB
-function getEntries(db, empId) {
-  return db.prepare(
+async function getEntries(empId) {
+  return (await query(
     `SELECT se.employee_id, se.date, se.is_day_off,
             st.duration_hours
      FROM schedule_entries se
      LEFT JOIN shift_types st ON se.shift_type_id = st.id
-     WHERE se.employee_id = ?
-     ORDER BY se.date`
-  ).all(empId);
+     WHERE se.employee_id = $1
+     ORDER BY se.date`,
+    [empId]
+  )).rows;
 }
 
-function setCycleStart(db, empId, month, year) {
-  db.prepare('UPDATE employees SET cycle_start_month = ?, cycle_start_year = ? WHERE id = ?')
-    .run(month, year, empId);
+async function setCycleStart(empId, month, year) {
+  await query(
+    'UPDATE employees SET cycle_start_month = $1, cycle_start_year = $2 WHERE id = $3',
+    [month, year, empId]
+  );
 }
 
 // ── Suíte 1: null-preferred com cycle_start Jan/2026 ──────────────────────────
 describe('null-preferred + cycle_start Jan/2026 — Abril 2026', () => {
   it('semana 0 (42h) deve produzir 42h, não 36h — bug #136', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const h0 = weeklyHours(entries, emp.id, WEEK0);
     expect(h0).toBe(42);
   });
 
   it('semana 1 (42h) deve produzir 42h, não 36h — bug #136', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const h1 = weeklyHours(entries, emp.id, WEEK1);
     expect(h1).toBe(42);
   });
 
   it('semana 2 (36h) deve produzir 36h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const h2 = weeklyHours(entries, emp.id, WEEK2);
     expect(h2).toBe(36);
   });
 
   it('semana 3 (42h) deve produzir 42h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const h3 = weeklyHours(entries, emp.id, WEEK3);
     expect(h3).toBe(42);
   });
 
   it('nunca duas semanas consecutivas de 36h — bug #136', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const weeks = [WEEK0, WEEK1, WEEK2, WEEK3];
     const hoursPerWeek = weeks.map((w) => weeklyHours(entries, emp.id, w));
 
@@ -141,35 +140,32 @@ describe('null-preferred + cycle_start Jan/2026 — Abril 2026', () => {
 // ── Suíte 2: cycle_start Mai/2026 ─────────────────────────────────────────────
 describe('null-preferred + cycle_start Mai/2026 — Abril 2026', () => {
   it('semana 0 (42h) deve produzir 42h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 5, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 5, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     expect(weeklyHours(entries, emp.id, WEEK0)).toBe(42);
   });
 
   it('semana 1 (36h) deve produzir 36h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 5, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 5, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     expect(weeklyHours(entries, emp.id, WEEK1)).toBe(36);
   });
 
   it('semana 2 (42h) deve produzir 42h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 5, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 5, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     expect(weeklyHours(entries, emp.id, WEEK2)).toBe(42);
   });
 });
@@ -177,24 +173,22 @@ describe('null-preferred + cycle_start Mai/2026 — Abril 2026', () => {
 // ── Suíte 3: cycle_start Set/2026 ─────────────────────────────────────────────
 describe('null-preferred + cycle_start Set/2026 — Abril 2026', () => {
   it('semana 0 (42h) deve produzir 42h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 9, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 9, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     expect(weeklyHours(entries, emp.id, WEEK0)).toBe(42);
   });
 
   it('semana 1 (36h) deve produzir 36h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Alex', preferredShiftId: null });
-    setCycleStart(db, emp.id, 9, 2026);
+    const emp = await createEmployee(null, { name: 'Alex', preferredShiftId: null });
+    await setCycleStart(emp.id, 9, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     expect(weeklyHours(entries, emp.id, WEEK1)).toBe(36);
   });
 });
@@ -202,26 +196,24 @@ describe('null-preferred + cycle_start Set/2026 — Abril 2026', () => {
 // ── Suíte 4: outros perfis — Manhã/Tarde devem respeitar weekType ─────────────
 describe('perfil Noturno + cycle_start Jan/2026 — Abril 2026', () => {
   it('semana 0 (42h) deve produzir 42h para motorista Noturno', async () => {
-    const db = freshDb();
-    const notId = shiftId(db, 'Noturno');
-    const emp = createEmployee(db, { name: 'Carlos', preferredShiftId: notId });
-    setCycleStart(db, emp.id, 1, 2026);
+    const notId = await shiftId(null, 'Noturno');
+    const emp = await createEmployee(null, { name: 'Carlos', preferredShiftId: notId });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     expect(weeklyHours(entries, emp.id, WEEK0)).toBe(42);
   });
 
   it('semana 1 (42h) deve produzir 42h para motorista Noturno', async () => {
-    const db = freshDb();
-    const notId = shiftId(db, 'Noturno');
-    const emp = createEmployee(db, { name: 'Carlos', preferredShiftId: notId });
-    setCycleStart(db, emp.id, 1, 2026);
+    const notId = await shiftId(null, 'Noturno');
+    const emp = await createEmployee(null, { name: 'Carlos', preferredShiftId: notId });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule(APR);
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     expect(weeklyHours(entries, emp.id, WEEK1)).toBe(42);
   });
 });

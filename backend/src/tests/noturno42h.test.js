@@ -31,7 +31,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
-import { freshDb } from './helpers.js';
+import { freshDb  } from './helpers.js';
 
 const FEV = { month: 2, year: 2025 };
 
@@ -41,7 +41,7 @@ const FEV_WEEK2 = ['2025-02-09','2025-02-10','2025-02-11','2025-02-12','2025-02-
 const FEV_WEEK3 = ['2025-02-16','2025-02-17','2025-02-18','2025-02-19','2025-02-20','2025-02-21','2025-02-22'];
 const FEV_WEEK4 = ['2025-02-23','2025-02-24','2025-02-25','2025-02-26','2025-02-27','2025-02-28'];
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

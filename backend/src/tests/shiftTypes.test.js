@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
-import { freshDb } from './helpers.js';
+import { freshDb  } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 describe('GET /api/shift-types', () => {
   it('retorna os 4 turnos fixos após seed — Diurno, Noturno, Manhã e Tarde', async () => {

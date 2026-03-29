@@ -31,7 +31,7 @@ import app from '../app.js';
 import { freshDb } from './helpers.js';
 import { getSchedulePeriod } from '../services/scheduleGenerator.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 const YEAR = 2026;
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];

@@ -62,7 +62,7 @@ function totalHoursOf(entries, empId) {
     .reduce((sum, e) => sum + (e.duration_hours || 0), 0);
 }
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Cenário A ─────────────────────────────────────────────────────────────────
 // Não-ADM (Ambulância): cycle_start é apenas label contábil CLT — não afeta

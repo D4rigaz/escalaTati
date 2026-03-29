@@ -12,7 +12,7 @@ import request from 'supertest';
 import app from '../app.js';
 import { freshDb } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 const APR2026 = { month: 4, year: 2026 };
 const SHIFT_DIURNO_ID = 1;

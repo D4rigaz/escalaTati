@@ -15,9 +15,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
-import { freshDb } from './helpers.js';
+import { freshDb  } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 async function createEmp(name = 'Motorista') {
   const res = await request(app).post('/api/employees').send({

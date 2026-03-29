@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
+import { query } from '../db/database.js';
 import { freshDb, createEmployee, shiftId } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 describe('GET /api/schedules', () => {
   it('retorna 400 sem month e year', async () => {
@@ -52,9 +53,8 @@ describe('POST /api/schedules/generate', () => {
   });
 
   it('gera escala com sucesso e retorna estrutura esperada', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'João', cargo: 'Técnico', setor: 'TI' });
-    createEmployee(db, { name: 'Maria', cargo: 'Técnica', setor: 'TI' });
+    await createEmployee(null, { name: 'João', cargo: 'Técnico', setor: 'TI' });
+    await createEmployee(null, { name: 'Maria', cargo: 'Técnica', setor: 'TI' });
 
     const res = await request(app)
       .post('/api/schedules/generate')
@@ -72,7 +72,6 @@ describe('POST /api/schedules/generate', () => {
   });
 
   it('gera escala vazia quando não há funcionários', async () => {
-    freshDb();
     const res = await request(app)
       .post('/api/schedules/generate')
       .send({ month: 1, year: 2025 });
@@ -85,60 +84,60 @@ describe('POST /api/schedules/generate', () => {
   });
 
   it('não sobrescreve entradas bloqueadas por padrão', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Ana' });
-    const sid = shiftId(db, 'Diurno');
+    const emp = await createEmployee(null, { name: 'Ana' });
+    const sid = await shiftId(null, 'Diurno');
 
     // Insere entrada bloqueada manualmente
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked) VALUES (?, ?, ?, 0, 1)'
-    ).run(emp.id, sid, '2025-01-15');
+    await query(
+      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked) VALUES ($1, $2, $3, FALSE, TRUE)',
+      [emp.id, sid, '2025-01-15']
+    );
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
-    const entry = db
-      .prepare('SELECT * FROM schedule_entries WHERE employee_id = ? AND date = ?')
-      .get(emp.id, '2025-01-15');
+    const entry = (await query(
+      'SELECT * FROM schedule_entries WHERE employee_id = $1 AND date = $2',
+      [emp.id, '2025-01-15']
+    )).rows[0];
 
     expect(entry.shift_type_id).toBe(sid);
-    expect(entry.is_locked).toBe(1);
+    expect(entry.is_locked).toBe(true);
   });
 });
 
 describe('PUT /api/schedules/entry/:id', () => {
   it('retorna 404 para id inexistente', async () => {
-    freshDb();
     const res = await request(app).put('/api/schedules/entry/9999').send({ is_day_off: true });
     expect(res.status).toBe(404);
   });
 
   it('atualiza is_day_off de uma entrada', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Carlos' });
-    const sid = shiftId(db, 'Noturno');
+    const emp = await createEmployee(null, { name: 'Carlos' });
+    const sid = await shiftId(null, 'Noturno');
 
-    const result = db
-      .prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
-      .run(emp.id, sid, '2025-03-10');
+    const { rows } = await query(
+      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES ($1, $2, $3, FALSE) RETURNING id',
+      [emp.id, sid, '2025-03-10']
+    );
 
     const res = await request(app)
-      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .put(`/api/schedules/entry/${rows[0].id}`)
       .send({ is_day_off: true });
 
     expect(res.status).toBe(200);
-    expect(res.body.is_day_off).toBe(1);
+    expect(res.body.is_day_off).toBe(true);
   });
 
   it('atualiza notas de uma entrada', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Diana' });
+    const emp = await createEmployee(null, { name: 'Diana' });
 
-    const result = db
-      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES (?, ?, 1)')
-      .run(emp.id, '2025-03-12');
+    const { rows } = await query(
+      'INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES ($1, $2, TRUE) RETURNING id',
+      [emp.id, '2025-03-12']
+    );
 
     const res = await request(app)
-      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .put(`/api/schedules/entry/${rows[0].id}`)
       .send({ notes: 'Licença médica' });
 
     expect(res.status).toBe(200);
@@ -146,15 +145,15 @@ describe('PUT /api/schedules/entry/:id', () => {
   });
 
   it('setor_override "" é normalizado para null (issue #15)', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Eduardo', setores: ['Transporte Ambulância'] });
+    const emp = await createEmployee(null, { name: 'Eduardo', setores: ['Transporte Ambulância'] });
 
-    const result = db
-      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES (?, ?, 0, ?)')
-      .run(emp.id, '2025-03-15', 'Transporte Ambulância');
+    const { rows } = await query(
+      'INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES ($1, $2, FALSE, $3) RETURNING id',
+      [emp.id, '2025-03-15', 'Transporte Ambulância']
+    );
 
     const res = await request(app)
-      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .put(`/api/schedules/entry/${rows[0].id}`)
       .send({ setor_override: '' });
 
     expect(res.status).toBe(200);
@@ -162,15 +161,15 @@ describe('PUT /api/schedules/entry/:id', () => {
   });
 
   it('setor_override null limpa o override existente', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Flávia', setores: ['Transporte Ambulância'] });
+    const emp = await createEmployee(null, { name: 'Flávia', setores: ['Transporte Ambulância'] });
 
-    const result = db
-      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES (?, ?, 0, ?)')
-      .run(emp.id, '2025-03-16', 'Transporte Ambulância');
+    const { rows } = await query(
+      'INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES ($1, $2, FALSE, $3) RETURNING id',
+      [emp.id, '2025-03-16', 'Transporte Ambulância']
+    );
 
     const res = await request(app)
-      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .put(`/api/schedules/entry/${rows[0].id}`)
       .send({ setor_override: null });
 
     expect(res.status).toBe(200);
@@ -178,18 +177,18 @@ describe('PUT /api/schedules/entry/:id', () => {
   });
 
   it('setor_override válido é aceito e persistido', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, {
+    const emp = await createEmployee(null, {
       name: 'Gustavo',
       setores: ['Transporte Ambulância', 'Transporte Hemodiálise'],
     });
 
-    const result = db
-      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES (?, ?, 0)')
-      .run(emp.id, '2025-03-17');
+    const { rows } = await query(
+      'INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES ($1, $2, FALSE) RETURNING id',
+      [emp.id, '2025-03-17']
+    );
 
     const res = await request(app)
-      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .put(`/api/schedules/entry/${rows[0].id}`)
       .send({ setor_override: 'Transporte Hemodiálise' });
 
     expect(res.status).toBe(200);
@@ -197,15 +196,15 @@ describe('PUT /api/schedules/entry/:id', () => {
   });
 
   it('setor_override inválido (não pertence ao funcionário) retorna 400', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Helena', setores: ['Transporte Ambulância'] });
+    const emp = await createEmployee(null, { name: 'Helena', setores: ['Transporte Ambulância'] });
 
-    const result = db
-      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES (?, ?, 0)')
-      .run(emp.id, '2025-03-18');
+    const { rows } = await query(
+      'INSERT INTO schedule_entries (employee_id, date, is_day_off) VALUES ($1, $2, FALSE) RETURNING id',
+      [emp.id, '2025-03-18']
+    );
 
     const res = await request(app)
-      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .put(`/api/schedules/entry/${rows[0].id}`)
       .send({ setor_override: 'Transporte Hemodiálise' });
 
     expect(res.status).toBe(400);
@@ -215,16 +214,16 @@ describe('PUT /api/schedules/entry/:id', () => {
   it('omitir setor_override não altera valor existente (no-op)', async () => {
     // Garante que o guard `setor_override !== undefined` funciona corretamente:
     // campos não enviados no payload não devem sobrescrever o valor no DB.
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Igor', setores: ['Transporte Ambulância'] });
+    const emp = await createEmployee(null, { name: 'Igor', setores: ['Transporte Ambulância'] });
 
-    const result = db
-      .prepare('INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES (?, ?, 0, ?)')
-      .run(emp.id, '2025-03-19', 'Transporte Ambulância');
+    const { rows } = await query(
+      'INSERT INTO schedule_entries (employee_id, date, is_day_off, setor_override) VALUES ($1, $2, FALSE, $3) RETURNING id',
+      [emp.id, '2025-03-19', 'Transporte Ambulância']
+    );
 
     // Atualiza apenas notes — setor_override não enviado
     const res = await request(app)
-      .put(`/api/schedules/entry/${result.lastInsertRowid}`)
+      .put(`/api/schedules/entry/${rows[0].id}`)
       .send({ notes: 'Observação' });
 
     expect(res.status).toBe(200);
@@ -240,15 +239,18 @@ describe('DELETE /api/schedules/month', () => {
   });
 
   it('remove todas as entradas do mês', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Eduardo' });
-    const sid = shiftId(db, 'Noturno');
+    const emp = await createEmployee(null, { name: 'Eduardo' });
+    const sid = await shiftId(null, 'Noturno');
 
     // Issue #112: período Mai/2025 começa em 04/05 (primeiro domingo). Usar datas dentro do período.
-    db.prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
-      .run(emp.id, sid, '2025-05-04');
-    db.prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
-      .run(emp.id, sid, '2025-05-05');
+    await query(
+      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES ($1, $2, $3, FALSE)',
+      [emp.id, sid, '2025-05-04']
+    );
+    await query(
+      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES ($1, $2, $3, FALSE)',
+      [emp.id, sid, '2025-05-05']
+    );
 
     const res = await request(app).delete('/api/schedules/month?month=5&year=2025');
     expect(res.status).toBe(200);
@@ -259,12 +261,13 @@ describe('DELETE /api/schedules/month', () => {
   });
 
   it('não remove entradas de outros meses', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Flávia' });
-    const sid = shiftId(db, 'Diurno');
+    const emp = await createEmployee(null, { name: 'Flávia' });
+    const sid = await shiftId(null, 'Diurno');
 
-    db.prepare('INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES (?, ?, ?, 0)')
-      .run(emp.id, sid, '2025-04-15');
+    await query(
+      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off) VALUES ($1, $2, $3, FALSE)',
+      [emp.id, sid, '2025-04-15']
+    );
 
     await request(app).delete('/api/schedules/month?month=5&year=2025');
 

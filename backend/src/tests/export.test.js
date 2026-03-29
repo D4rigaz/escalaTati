@@ -3,8 +3,9 @@ import request from 'supertest';
 import ExcelJS from 'exceljs';
 import app from '../app.js';
 import { freshDb, createEmployee, shiftId } from './helpers.js';
+import { query } from '../db/database.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ─── Validação ────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ describe('GET /api/export/excel', () => {
   });
 
   it('retorna 200 com funcionário sem entradas (todos folga)', async () => {
-    createEmployee(freshDb(), { name: 'Ana', setores: ['Transporte Ambulância'] });
+    await createEmployee(null, { name: 'Ana', setores: ['Transporte Ambulância'] });
 
     const res = await request(app).get('/api/export/excel?month=1&year=2025');
     expect(res.status).toBe(200);
@@ -78,12 +79,12 @@ describe('GET /api/export/excel', () => {
   });
 
   it('retorna 200 com entrada de plantão noturno', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Bruno', setores: ['Transporte Ambulância'] });
-    const nId = shiftId(db, 'Noturno');
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, ?, 0)'
-    ).run(emp.id, '2025-01-15', nId);
+    const emp = await createEmployee(null, { name: 'Bruno', setores: ['Transporte Ambulância'] });
+    const nId = await shiftId(null, 'Noturno');
+    await query(
+      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, $3, FALSE)',
+      [emp.id, '2025-01-15', nId]
+    );
 
     const res = await request(app).get('/api/export/excel?month=1&year=2025');
     expect(res.status).toBe(200);
@@ -91,33 +92,31 @@ describe('GET /api/export/excel', () => {
   });
 
   it('retorna 200 com entrada de plantão diurno', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Carlos', setores: ['Transporte Hemodiálise'] });
-    const dId = shiftId(db, 'Diurno');
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, ?, 0)'
-    ).run(emp.id, '2025-01-10', dId);
+    const emp = await createEmployee(null, { name: 'Carlos', setores: ['Transporte Hemodiálise'] });
+    const dId = await shiftId(null, 'Diurno');
+    await query(
+      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, $3, FALSE)',
+      [emp.id, '2025-01-10', dId]
+    );
 
     const res = await request(app).get('/api/export/excel?month=1&year=2025');
     expect(res.status).toBe(200);
   });
 
   it('retorna 200 com múltiplos funcionários e shift_type_id null (entrada sem turno)', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Diana' });
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, NULL, 0)'
-    ).run(emp.id, '2025-01-05');
+    const emp = await createEmployee(null, { name: 'Diana' });
+    await query(
+      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, NULL, FALSE)',
+      [emp.id, '2025-01-05']
+    );
 
     const res = await request(app).get('/api/export/excel?month=1&year=2025');
     expect(res.status).toBe(200);
   });
 
   it('retorna 200 com cor de funcionário customizada (stripe no Excel)', async () => {
-    const db = freshDb();
-    db.prepare("UPDATE employees SET color = '#FF5733' WHERE id = ?").run(
-      createEmployee(db, { name: 'Eduardo' }).id
-    );
+    const emp = await createEmployee(null, { name: 'Eduardo' });
+    await query("UPDATE employees SET color = $1 WHERE id = $2", ['#FF5733', emp.id]);
 
     const res = await request(app).get('/api/export/excel?month=1&year=2025');
     expect(res.status).toBe(200);
@@ -176,15 +175,15 @@ describe('GET /api/export/excel', () => {
   it('total de horas dentro do alvo — sem afetar o status da resposta', async () => {
     // Verifica que funcionário com totalHours próximo de 160h (isOk=true)
     // e com totalHours distante (isOk=false) não causam erro na geração.
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Fábio' });
-    const nId = shiftId(db, 'Noturno'); // 12h cada
+    const emp = await createEmployee(null, { name: 'Fábio' });
+    const nId = await shiftId(null, 'Noturno'); // 12h cada
     // 14 plantões = 168h (distante de 160 → isOk=false, fonte vermelha)
     for (let d = 1; d <= 14; d++) {
       const date = `2025-01-${String(d).padStart(2, '0')}`;
-      db.prepare(
-        'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, ?, 0)'
-      ).run(emp.id, date, nId);
+      await query(
+        'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, $3, FALSE)',
+        [emp.id, date, nId]
+      );
     }
 
     const res = await request(app).get('/api/export/excel?month=1&year=2025');
@@ -214,7 +213,7 @@ describe('GET /api/export/pdf', () => {
   });
 
   it('retorna 200 com funcionário sem entradas', async () => {
-    createEmployee(freshDb(), { name: 'Gisele', setores: ['Transporte Ambulância'] });
+    await createEmployee(null, { name: 'Gisele', setores: ['Transporte Ambulância'] });
 
     const res = await request(app).get('/api/export/pdf?month=1&year=2025');
     expect(res.status).toBe(200);
@@ -222,12 +221,12 @@ describe('GET /api/export/pdf', () => {
   });
 
   it('retorna 200 com entrada de plantão e cor de turno (hexToRgb exercitado)', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Hugo', setores: ['Transporte Hemodiálise'] });
-    const dId = shiftId(db, 'Diurno');
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, ?, 0)'
-    ).run(emp.id, '2025-01-20', dId);
+    const emp = await createEmployee(null, { name: 'Hugo', setores: ['Transporte Hemodiálise'] });
+    const dId = await shiftId(null, 'Diurno');
+    await query(
+      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, $3, FALSE)',
+      [emp.id, '2025-01-20', dId]
+    );
 
     const res = await request(app).get('/api/export/pdf?month=1&year=2025');
     expect(res.status).toBe(200);
@@ -235,43 +234,43 @@ describe('GET /api/export/pdf', () => {
   });
 
   it('retorna 200 com shift_type_id null (hexToRgb não é chamado — fallback vazio)', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Iara' });
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, NULL, 0)'
-    ).run(emp.id, '2025-01-07');
+    const emp = await createEmployee(null, { name: 'Iara' });
+    await query(
+      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, NULL, FALSE)',
+      [emp.id, '2025-01-07']
+    );
 
     const res = await request(app).get('/api/export/pdf?month=1&year=2025');
     expect(res.status).toBe(200);
   });
 
   it('retorna 200 com múltiplos funcionários e entradas mistas', async () => {
-    const db = freshDb();
-    const emp1 = createEmployee(db, { name: 'João', setores: ['Transporte Ambulância'] });
-    const emp2 = createEmployee(db, { name: 'Karla', setores: ['Transporte Hemodiálise'] });
-    const nId = shiftId(db, 'Noturno');
-    const dId = shiftId(db, 'Diurno');
+    const emp1 = await createEmployee(null, { name: 'João', setores: ['Transporte Ambulância'] });
+    const emp2 = await createEmployee(null, { name: 'Karla', setores: ['Transporte Hemodiálise'] });
+    const nId = await shiftId(null, 'Noturno');
 
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, ?, 0)'
-    ).run(emp1.id, '2025-01-10', nId);
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, ?, 1)'
-    ).run(emp2.id, '2025-01-10', null);
+    await query(
+      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, $3, FALSE)',
+      [emp1.id, '2025-01-10', nId]
+    );
+    await query(
+      'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, NULL, TRUE)',
+      [emp2.id, '2025-01-10']
+    );
 
     const res = await request(app).get('/api/export/pdf?month=1&year=2025');
     expect(res.status).toBe(200);
   });
 
   it('total de horas fora do alvo (isOk=false) não causa erro na geração', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Lara' });
-    const nId = shiftId(db, 'Noturno');
+    const emp = await createEmployee(null, { name: 'Lara' });
+    const nId = await shiftId(null, 'Noturno');
     for (let d = 1; d <= 14; d++) {
       const date = `2025-01-${String(d).padStart(2, '0')}`;
-      db.prepare(
-        'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES (?, ?, ?, 0)'
-      ).run(emp.id, date, nId);
+      await query(
+        'INSERT INTO schedule_entries (employee_id, date, shift_type_id, is_day_off) VALUES ($1, $2, $3, FALSE)',
+        [emp.id, date, nId]
+      );
     }
 
     const res = await request(app).get('/api/export/pdf?month=1&year=2025');

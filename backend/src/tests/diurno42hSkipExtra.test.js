@@ -41,7 +41,7 @@ import request from 'supertest';
 import app from '../app.js';
 import { freshDb } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Constantes de cenário ────────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ describe('fix #100 — DIURNO 42h semana com Dom bloqueado por rest cross-week',
       // Dom Jan 19 deve ser plantão (não folga)
       const domEntry = w3.find((e) => e.date === '2025-01-19');
       expect(domEntry, `empId=${empId} domEntry existe`).toBeDefined();
-      expect(domEntry.is_day_off, `empId=${empId} Dom trabalhado`).toBe(0);
+      expect(domEntry.is_day_off, `empId=${empId} Dom trabalhado`).toBe(false);
     }
   });
 
@@ -221,7 +221,7 @@ describe('fix #100 — DIURNO 42h semana com Dom bloqueado por rest cross-week',
 
       // Dom Jan 19 trabalhado — Fix #145: próximo domingo é sempre nova semana
       const domEntry = w3.find((e) => e.date === '2025-01-19');
-      expect(domEntry?.is_day_off).toBe(0);
+      expect(domEntry?.is_day_off).toBe(false);
     }
   });
 });

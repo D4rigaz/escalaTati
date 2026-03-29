@@ -22,15 +22,15 @@ import request from 'supertest';
 import app from '../app.js';
 import { freshDb, createEmployee } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Cenário 1 ─────────────────────────────────────────────────────────────────
 
 describe('E2E Cenário 1 — fluxo completo: criar → gerar → exportar', () => {
   it('2 motoristas em setores distintos: entries criadas e Excel exportado com Content-Type correto', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Motorista Amb', setor: 'Transporte Ambulância' });
-    createEmployee(db, { name: 'Motorista Hemo', setor: 'Transporte Hemodiálise' });
+    await freshDb();
+    await createEmployee(null, { name: 'Motorista Amb', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'Motorista Hemo', setor: 'Transporte Hemodiálise' });
 
     // Gerar escala
     const genRes = await request(app)
@@ -64,9 +64,9 @@ describe('E2E Cenário 1 — fluxo completo: criar → gerar → exportar', () =
 
 describe('E2E Cenário 2 — geração + observabilidade via GET /api/schedules/generations', () => {
   it('após geração, generations contém params_json com results (por motorista) e warnings', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Motorista Amb', setor: 'Transporte Ambulância' });
-    createEmployee(db, { name: 'Motorista Hemo', setor: 'Transporte Hemodiálise' });
+    await freshDb();
+    await createEmployee(null, { name: 'Motorista Amb', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'Motorista Hemo', setor: 'Transporte Hemodiálise' });
 
     await request(app)
       .post('/api/schedules/generate')
@@ -103,8 +103,8 @@ describe('E2E Cenário 2 — geração + observabilidade via GET /api/schedules/
 
 describe('E2E Cenário 3 — regeneração do mesmo mês', () => {
   it('duas gerações com overwriteLocked: true → ambas bem-sucedidas e 2 registros em schedule_generations', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Motorista Amb', setor: 'Transporte Ambulância' });
+    await freshDb();
+    await createEmployee(null, { name: 'Motorista Amb', setor: 'Transporte Ambulância' });
 
     const res1 = await request(app)
       .post('/api/schedules/generate')
