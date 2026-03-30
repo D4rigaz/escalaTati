@@ -3,7 +3,7 @@ services:
     name: escalatati
     env: node
     plan: free
-    buildCommand: npm ci && npm run build --workspace=frontend
+    buildCommand: npm ci --include=dev && npm run build --workspace=frontend
     startCommand: npm start --workspace=backend
     envVars:
       - key: NODE_ENV
