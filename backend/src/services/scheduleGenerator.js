@@ -355,6 +355,9 @@ export async function generateSchedule({ month, year, overwriteLocked = false })
   }
 
   // Post-generation coverage checks (Rules 16, 19, 21, 22)
+  // NOTE: estas funções usam query() global (fora de transaction). Se falharem a meio,
+  // o mês pode ficar em estado parcial. Risco aceito para o deploy inicial no Railway;
+  // envolver em transaction única é trabalho futuro (issue a abrir).
   if (diurnoShift) {
     await enforceDiurnoCoverage(employees, employeeSectorsMap, dates, diurnoShift, warnings);
   }

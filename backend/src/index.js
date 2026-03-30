@@ -10,7 +10,7 @@ import { errorHandler, notFound } from './middleware/errorHandler.js';
 const PORT = process.env.PORT || 3001;
 const app = express();
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5175', credentials: true }));
+app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:5173', credentials: true }));
 app.use(express.json());
 
 app.use('/api/employees', employeesRouter);
