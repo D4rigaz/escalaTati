@@ -23,10 +23,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
-import { freshDb } from './helpers.js';
+import { freshDb  } from './helpers.js';
 import { getSchedulePeriod } from '../services/scheduleGenerator.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Helper: getSchedulePeriod unit tests ──────────────────────────────────────
 

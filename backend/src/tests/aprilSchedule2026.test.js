@@ -47,7 +47,7 @@ import request from 'supertest';
 import app from '../app.js';
 import { freshDb } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Constantes de Abril/2026 ──────────────────────────────────────────────────
 // Período: primeiro domingo (05/04) → sábado antes do primeiro domingo de maio (02/05)

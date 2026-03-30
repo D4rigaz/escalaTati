@@ -1,32 +1,31 @@
-import { getDb } from '../db/database.js';
+import { query } from '../db/database.js';
 import { getDaysInMonth, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import ExcelJS from 'exceljs';
 import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
+import { applyPlugin } from 'jspdf-autotable';
+applyPlugin(jsPDF);
 
 const DOW_ABBR = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
-function getMonthData(month, year) {
-  const db = getDb();
+async function getMonthData(month, year) {
   const daysInMonth = getDaysInMonth(new Date(year, month - 1, 1));
   const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
   const endDate = `${year}-${String(month).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
 
-  const employees = db.prepare('SELECT * FROM employees WHERE active = 1 ORDER BY name').all();
-  const shiftTypes = db.prepare('SELECT * FROM shift_types').all();
+  const employees = (await query('SELECT * FROM employees WHERE active = TRUE ORDER BY name')).rows;
+  const shiftTypes = (await query('SELECT * FROM shift_types')).rows;
   const shiftMap = {};
   for (const s of shiftTypes) shiftMap[s.id] = s;
 
-  const entries = db
-    .prepare(
-      `SELECT se.*, st.name as shift_name, st.color as shift_color, st.duration_hours
-       FROM schedule_entries se
-       LEFT JOIN shift_types st ON se.shift_type_id = st.id
-       WHERE se.date >= ? AND se.date <= ?
-       ORDER BY se.date, se.employee_id`
-    )
-    .all(startDate, endDate);
+  const entries = (await query(
+    `SELECT se.*, st.name as shift_name, st.color as shift_color, st.duration_hours
+     FROM schedule_entries se
+     LEFT JOIN shift_types st ON se.shift_type_id = st.id
+     WHERE se.date >= $1 AND se.date <= $2
+     ORDER BY se.date, se.employee_id`,
+    [startDate, endDate]
+  )).rows;
 
   // Build entry map: { employeeId: { date: entry } }
   const entryMap = {};
@@ -44,7 +43,7 @@ function getMonthData(month, year) {
 }
 
 export async function exportExcel(month, year) {
-  const { employees, shiftMap, entryMap, dates, daysInMonth } = getMonthData(month, year);
+  const { employees, shiftMap, entryMap, dates, daysInMonth } = await getMonthData(month, year);
   const monthName = format(new Date(year, month - 1, 1), 'MMMM yyyy', { locale: ptBR });
 
   const workbook = new ExcelJS.Workbook();
@@ -157,7 +156,7 @@ export async function exportExcel(month, year) {
 }
 
 export async function exportPdf(month, year) {
-  const { employees, shiftMap, entryMap, dates } = getMonthData(month, year);
+  const { employees, shiftMap, entryMap, dates } = await getMonthData(month, year);
   const monthName = format(new Date(year, month - 1, 1), 'MMMM yyyy', { locale: ptBR });
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
@@ -208,7 +207,7 @@ export async function exportPdf(month, year) {
     cellStyles.push(styles);
   }
 
-  autoTable(doc, {
+  doc.autoTable({
     head,
     body,
     startY: 24,
@@ -229,7 +228,7 @@ export async function exportPdf(month, year) {
   });
 
   // Legend
-  const finalY = doc.lastAutoTable.finalY + 5;
+  const finalY = (doc.lastAutoTable?.finalY ?? 24) + 5;
   doc.setFontSize(7);
   doc.setTextColor(107, 114, 128);
   doc.text('Legenda: M = Manhã (6h)   T = Tarde (6h)   N = Noturno (12h)   F = Folga', 5, finalY);

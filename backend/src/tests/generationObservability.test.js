@@ -21,9 +21,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
 import { freshDb, createEmployee } from './helpers.js';
-import { getDb } from '../db/database.js';
+import { query } from '../db/database.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 describe('POST /api/schedules/generate — observabilidade em schedule_generations (issue #46)', () => {
   // ── Caso 1 ──────────────────────────────────────────────────────────────────
@@ -32,8 +32,8 @@ describe('POST /api/schedules/generate — observabilidade em schedule_generatio
   // warnings é array, todos os warnings têm campo message (string).
 
   it('Caso 1 — 1 motorista sem warnings de desvio: results e warnings persistidos em params_json', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Motorista A', setor: 'Transporte Ambulância' });
+    await freshDb();
+    await createEmployee(null, { name: 'Motorista A', setor: 'Transporte Ambulância' });
 
     const genRes = await request(app)
       .post('/api/schedules/generate')
@@ -41,10 +41,8 @@ describe('POST /api/schedules/generate — observabilidade em schedule_generatio
     expect(genRes.status).toBe(200);
     expect(genRes.body.success).toBe(true);
 
-    // Lê diretamente da tabela schedule_generations via singleton
-    const row = getDb()
-      .prepare('SELECT params_json FROM schedule_generations ORDER BY id DESC LIMIT 1')
-      .get();
+    // Lê diretamente da tabela schedule_generations via query
+    const row = (await query('SELECT params_json FROM schedule_generations ORDER BY id DESC LIMIT 1')).rows[0];
     expect(row).toBeDefined();
 
     const params = JSON.parse(row.params_json);
@@ -85,18 +83,16 @@ describe('POST /api/schedules/generate — observabilidade em schedule_generatio
   // Verifica: params_json.warnings.length > 0, cada warning.message é string não-vazia.
 
   it('Caso 2 — 1 motorista Hemodiálise: warnings[] não-vazio com campo message serializado', async () => {
-    const db = freshDb();
+    await freshDb();
     // 1 Hemo employee: enforcement exige 2 Hemo por dia → sempre insuficiente
-    createEmployee(db, { name: 'Hemo 1', setor: 'Transporte Hemodiálise' });
+    await createEmployee(null, { name: 'Hemo 1', setor: 'Transporte Hemodiálise' });
 
     const genRes = await request(app)
       .post('/api/schedules/generate')
       .send({ month: 2, year: 2026, overwriteLocked: true });
     expect(genRes.status).toBe(200);
 
-    const row = getDb()
-      .prepare('SELECT params_json FROM schedule_generations ORDER BY id DESC LIMIT 1')
-      .get();
+    const row = (await query('SELECT params_json FROM schedule_generations ORDER BY id DESC LIMIT 1')).rows[0];
     expect(row).toBeDefined();
 
     const params = JSON.parse(row.params_json);
@@ -159,9 +155,7 @@ describe('POST /api/schedules/generate — observabilidade em schedule_generatio
     });
 
     // Verifica via schedule_generations (persistência)
-    const row = getDb()
-      .prepare('SELECT params_json FROM schedule_generations ORDER BY id DESC LIMIT 1')
-      .get();
+    const row = (await query('SELECT params_json FROM schedule_generations ORDER BY id DESC LIMIT 1')).rows[0];
     expect(row).toBeDefined();
 
     // Garante que params_json é JSON válido (sem crash de serialização)

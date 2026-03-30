@@ -19,9 +19,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
-import { freshDb, createEmployee } from './helpers.js';
+import { freshDb, createEmployee  } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Teste 1 ───────────────────────────────────────────────────────────────────
 
@@ -34,9 +34,9 @@ describe('Teste 1 — distribuição básica: 2 motoristas com folgas distintas'
   // o limite CLT semanal mas não há alternativa — isso é aceito como comportamento
   // esperado com o cap removido (PO confirmado).
   it('Mar/2026: motoristas têm conjuntos de folgas distintos (fix #55 preservado)', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Motorista A', setor: 'Transporte Ambulância' });
-    createEmployee(db, { name: 'Motorista B', setor: 'Transporte Ambulância' });
+    await freshDb();
+    await createEmployee(null, { name: 'Motorista A', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'Motorista B', setor: 'Transporte Ambulância' });
 
     const genRes = await request(app)
       .post('/api/schedules/generate')
@@ -61,9 +61,9 @@ describe('Teste 1 — distribuição básica: 2 motoristas com folgas distintas'
 
   // Verifica também Fev/2026 — outro mês crítico do bug original.
   it('Fev/2026: motoristas têm conjuntos de folgas distintos (fix #55 preservado)', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Motorista A', setor: 'Transporte Ambulância' });
-    createEmployee(db, { name: 'Motorista B', setor: 'Transporte Ambulância' });
+    await freshDb();
+    await createEmployee(null, { name: 'Motorista A', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'Motorista B', setor: 'Transporte Ambulância' });
 
     const genRes = await request(app)
       .post('/api/schedules/generate')
@@ -100,10 +100,10 @@ describe('Teste 2 — 12 meses de 2026: distribuição de folgas com 3 motorista
     const FORCED_2026 = { 1:1, 2:0, 3:2, 4:2, 5:2, 6:2, 7:2, 8:2, 9:3, 10:1, 11:1, 12:2 };
 
     for (let month = 1; month <= 12; month++) {
-      const db = freshDb();
-      createEmployee(db, { name: 'Motorista A', setor: 'Transporte Ambulância' });
-      createEmployee(db, { name: 'Motorista B', setor: 'Transporte Ambulância' });
-      createEmployee(db, { name: 'Motorista C', setor: 'Transporte Hemodiálise' });
+      await freshDb();
+      await createEmployee(null, { name: 'Motorista A', setor: 'Transporte Ambulância' });
+      await createEmployee(null, { name: 'Motorista B', setor: 'Transporte Ambulância' });
+      await createEmployee(null, { name: 'Motorista C', setor: 'Transporte Hemodiálise' });
 
       const res = await request(app)
         .post('/api/schedules/generate')
@@ -129,10 +129,10 @@ describe('Teste 2 — 12 meses de 2026: distribuição de folgas com 3 motorista
     const FORCED_CRITICOS = { 2:0, 3:2, 6:2, 9:3, 11:1, 12:2 };
 
     for (const month of CRITICOS) {
-      const db = freshDb();
-      createEmployee(db, { name: 'Motorista A', setor: 'Transporte Ambulância' });
-      createEmployee(db, { name: 'Motorista B', setor: 'Transporte Ambulância' });
-      createEmployee(db, { name: 'Motorista C', setor: 'Transporte Hemodiálise' });
+      await freshDb();
+      await createEmployee(null, { name: 'Motorista A', setor: 'Transporte Ambulância' });
+      await createEmployee(null, { name: 'Motorista B', setor: 'Transporte Ambulância' });
+      await createEmployee(null, { name: 'Motorista C', setor: 'Transporte Hemodiálise' });
 
       const res = await request(app)
         .post('/api/schedules/generate')

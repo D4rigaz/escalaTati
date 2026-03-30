@@ -3,7 +3,7 @@ import request from 'supertest';
 import app from '../app.js';
 import { freshDb, createEmployee } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ─── Regra 12: work_schedule seg_sex ─────────────────────────────────────────
 
@@ -51,10 +51,10 @@ describe('Regra 12 — work_schedule seg_sex: Sáb/Dom viram folga obrigatória'
     expect(sundayEntries.length).toBeGreaterThan(0); // período Jan/2025 tem 4 domingos (05, 12, 19, 26)
     // correctHours nunca converte domingos (lockedOffDates inclui segSexForcedOff).
     // No máximo 1 domingo pode ser convertido pelo enforcement Passo 4 (último recurso).
-    const sundaysForcedToWork = sundayEntries.filter((e) => e.is_day_off === 0);
+    const sundaysForcedToWork = sundayEntries.filter((e) => e.is_day_off === false);
     expect(sundaysForcedToWork.length).toBeLessThanOrEqual(1);
     // A maioria dos domingos deve ser folga
-    const sundaysDayOff = sundayEntries.filter((e) => e.is_day_off === 1);
+    const sundaysDayOff = sundayEntries.filter((e) => e.is_day_off === true);
     expect(sundaysDayOff.length).toBeGreaterThanOrEqual(sundayEntries.length - 1);
   });
 
@@ -78,7 +78,7 @@ describe('Regra 12 — work_schedule seg_sex: Sáb/Dom viram folga obrigatória'
     const saturdayEntries = entries.filter((e) => new Date(e.date + 'T12:00:00').getDay() === 6);
     expect(saturdayEntries.length).toBeGreaterThan(0); // Janeiro 2025 tem 4 sábados
     saturdayEntries.forEach((e) => {
-      expect(e.is_day_off).toBe(1);
+      expect(e.is_day_off).toBe(true);
     });
   });
 
@@ -118,7 +118,7 @@ describe('Regra 12 — work_schedule seg_sex: Sáb/Dom viram folga obrigatória'
     const weekendDayOffs = (empId) =>
       schedule.body.entries.filter((e) => {
         const dow = new Date(e.date + 'T12:00:00').getDay();
-        return e.employee_id === empId && (dow === 0 || dow === 6) && e.is_day_off === 1;
+        return e.employee_id === empId && (dow === 0 || dow === 6) && e.is_day_off === true;
       }).length;
 
     expect(weekendDayOffs(resSeg.body.id)).toBeGreaterThan(weekendDayOffs(resDom.body.id));
@@ -213,8 +213,8 @@ describe('Regras 14/17 — multi-setor via API e exclusividade ADM', () => {
   });
 
   it('PUT /api/employees/:id atualiza setores para multi-setor', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Igor', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Igor', setor: 'Transporte Ambulância' });
 
     const res = await request(app)
       .put(`/api/employees/${emp.id}`)
@@ -224,8 +224,8 @@ describe('Regras 14/17 — multi-setor via API e exclusividade ADM', () => {
   });
 
   it('PUT /api/employees/:id rejeita ADM combinado com outro setor', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Julia', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Julia', setor: 'Transporte Ambulância' });
 
     const res = await request(app)
       .put(`/api/employees/${emp.id}`)
@@ -234,8 +234,8 @@ describe('Regras 14/17 — multi-setor via API e exclusividade ADM', () => {
   });
 
   it('GET /api/employees retorna setores de cada funcionário', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Karla', setores: ['Transporte Ambulância', 'Transporte Hemodiálise'] });
+    await freshDb();
+    await createEmployee(null, { name: 'Karla', setores: ['Transporte Ambulância', 'Transporte Hemodiálise'] });
 
     const res = await request(app).get('/api/employees');
     expect(res.status).toBe(200);
@@ -285,8 +285,8 @@ describe('Regra 20 — campo color no cadastro de funcionário', () => {
   });
 
   it('PUT /api/employees/:id atualiza cor', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Paula', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Paula', setor: 'Transporte Ambulância' });
 
     const res = await request(app)
       .put(`/api/employees/${emp.id}`)
@@ -296,8 +296,8 @@ describe('Regra 20 — campo color no cadastro de funcionário', () => {
   });
 
   it('GET /api/employees retorna campo color em cada funcionário', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Roberto', setor: 'Transporte Ambulância' });
+    await freshDb();
+    await createEmployee(null, { name: 'Roberto', setor: 'Transporte Ambulância' });
 
     const res = await request(app).get('/api/employees');
     expect(res.status).toBe(200);
@@ -310,8 +310,8 @@ describe('Regra 20 — campo color no cadastro de funcionário', () => {
 
 describe('Regra 23 — férias: CRUD e integração com gerador', () => {
   it('POST /api/employees/:id/vacations cria período de férias', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Sofia', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Sofia', setor: 'Transporte Ambulância' });
 
     const res = await request(app)
       .post(`/api/employees/${emp.id}/vacations`)
@@ -322,8 +322,8 @@ describe('Regra 23 — férias: CRUD e integração com gerador', () => {
   });
 
   it('POST /api/employees/:id/vacations rejeita data inválida (2025-02-30)', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Tiago', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Tiago', setor: 'Transporte Ambulância' });
 
     const res = await request(app)
       .post(`/api/employees/${emp.id}/vacations`)
@@ -333,8 +333,8 @@ describe('Regra 23 — férias: CRUD e integração com gerador', () => {
   });
 
   it('POST /api/employees/:id/vacations rejeita end_date < start_date', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Ursula', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Ursula', setor: 'Transporte Ambulância' });
 
     const res = await request(app)
       .post(`/api/employees/${emp.id}/vacations`)
@@ -344,8 +344,8 @@ describe('Regra 23 — férias: CRUD e integração com gerador', () => {
   });
 
   it('GET /api/employees/:id/vacations lista férias do funcionário', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Vera', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Vera', setor: 'Transporte Ambulância' });
 
     await request(app)
       .post(`/api/employees/${emp.id}/vacations`)
@@ -358,8 +358,8 @@ describe('Regra 23 — férias: CRUD e integração com gerador', () => {
   });
 
   it('DELETE /api/employees/:id/vacations/:vid remove férias', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Walter', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Walter', setor: 'Transporte Ambulância' });
 
     const created = await request(app)
       .post(`/api/employees/${emp.id}/vacations`)
@@ -375,8 +375,8 @@ describe('Regra 23 — férias: CRUD e integração com gerador', () => {
   });
 
   it('gerador marca dias de férias como is_day_off=1 com notes=Férias', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Xavier', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Xavier', setor: 'Transporte Ambulância' });
 
     // Cadastrar férias via API
     await request(app)
@@ -393,14 +393,14 @@ describe('Regra 23 — férias: CRUD e integração com gerador', () => {
 
     expect(vacDays).toHaveLength(3);
     vacDays.forEach((e) => {
-      expect(e.is_day_off).toBe(1);
+      expect(e.is_day_off).toBe(true);
       expect(e.notes).toBe('Férias');
     });
   });
 
   it('gerador não converte dias de férias em plantões na correção de horas', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Yara', setor: 'Transporte Ambulância' });
+    await freshDb();
+    const emp = await createEmployee(null, { name: 'Yara', setor: 'Transporte Ambulância' });
 
     // Férias cobrindo a maior parte do mês: pouquíssimas horas disponíveis
     await request(app)
@@ -417,7 +417,7 @@ describe('Regra 23 — férias: CRUD e integração com gerador', () => {
 
     // Nenhum dos dias de férias deve ter virado plantão
     vacEntries.forEach((e) => {
-      expect(e.is_day_off).toBe(1);
+      expect(e.is_day_off).toBe(true);
       expect(e.notes).toBe('Férias');
     });
   });

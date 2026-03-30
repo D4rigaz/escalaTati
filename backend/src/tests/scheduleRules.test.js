@@ -1,16 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
+import { query } from '../db/database.js';
 import { freshDb, createEmployee, shiftId } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ─── Regra 1: Padrão de 12 horas ────────────────────────────────────────────
 
 describe('Regra 1 — padrão de 12h', () => {
   it('prefere turnos de 12h (Diurno/Noturno) sobre turnos de 6h', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Ana' });
+    await createEmployee(null, { name: 'Ana' });
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
@@ -32,11 +32,10 @@ describe('Regra 1 — padrão de 12h', () => {
 
 describe('Regra 2 — proibido 24h consecutivas', () => {
   it('nunca gera entradas que totalizam 24h consecutivas para o mesmo funcionário', async () => {
-    const db = freshDb();
     // Fix #119: usar Noturno explícito para garantir consistência entre gerador e enforcement.
     // Workers null-preferred no else branch (pós fix #119) podem receber Noturno pelo gerador
     // e Diurno pelo enforcement Step 2, criando par Noturno→Diurno(0h rest) = 24h consecutivas.
-    createEmployee(db, { name: 'Bruno', preferredShiftId: shiftId(db, 'Noturno') });
+    await createEmployee(null, { name: 'Bruno', preferredShiftId: await shiftId(null, 'Noturno') });
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
@@ -73,8 +72,7 @@ describe('Regra 2 — proibido 24h consecutivas', () => {
 
 describe('Regra 13 — sem days_off_per_week, total de horas próximo de 160h', () => {
   it('a escala não tem campo days_off_per_week nas rest_rules', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Carla' });
+    await createEmployee(null, { name: 'Carla' });
 
     const res = await request(app).get('/api/employees');
     expect(res.status).toBe(200);
@@ -83,8 +81,7 @@ describe('Regra 13 — sem days_off_per_week, total de horas próximo de 160h', 
   });
 
   it('total de horas mensal fica entre 144h e 180h (meses com 5 semanas podem exceder 160h)', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Carla' });
+    await createEmployee(null, { name: 'Carla' });
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
@@ -101,18 +98,19 @@ describe('Regra 13 — sem days_off_per_week, total de horas próximo de 160h', 
 
 describe('Regra 4 — emendado Tarde→Noturno e Noturno→Manhã são permitidos', () => {
   it('permite Noturno seguido de Manhã (emendado válido, 18h total)', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'Diego' });
-    const noturnoId = shiftId(db, 'Noturno');
-    const manhaId   = shiftId(db, 'Manhã');
+    const emp = await createEmployee(null, { name: 'Diego' });
+    const noturnoId = await shiftId(null, 'Noturno');
+    const manhaId   = await shiftId(null, 'Manhã');
 
     // Força emendado manualmente: Noturno dia 10 (termina 06:00 dia 11) + Manhã dia 11 (06:00-12:00)
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked) VALUES (?, ?, ?, 0, 1)'
-    ).run(emp.id, noturnoId, '2025-02-10');
-    db.prepare(
-      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked) VALUES (?, ?, ?, 0, 1)'
-    ).run(emp.id, manhaId, '2025-02-11');
+    await query(
+      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked) VALUES ($1, $2, $3, FALSE, TRUE)',
+      [emp.id, noturnoId, '2025-02-10']
+    );
+    await query(
+      'INSERT INTO schedule_entries (employee_id, shift_type_id, date, is_day_off, is_locked) VALUES ($1, $2, $3, FALSE, TRUE)',
+      [emp.id, manhaId, '2025-02-11']
+    );
 
     const schedule = await request(app).get('/api/schedules?month=2&year=2025');
     const n = schedule.body.entries.find((e) => e.date === '2025-02-10');
@@ -129,9 +127,8 @@ describe('Regra 4 — emendado Tarde→Noturno e Noturno→Manhã são permitido
 
 describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
   it('gera warnings de cobertura Diurno quando não há motoristas Hemodiálise suficientes', async () => {
-    const db = freshDb();
     // Somente 1 motorista de Ambulância — sem Hemodiálise
-    createEmployee(db, { name: 'Eduardo', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'Eduardo', setor: 'Transporte Ambulância' });
 
     const res = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
@@ -146,17 +143,16 @@ describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
 
   it('com 6 motoristas de Ambulância gera menos warnings noturnos que com 1 motorista', async () => {
     // Cenário A: 6 motoristas
-    const db6 = freshDb();
     for (let i = 0; i < 6; i++) {
-      createEmployee(db6, { name: `Motorista ${i}`, setor: 'Transporte Ambulância' });
+      await createEmployee(null, { name: `Motorista ${i}`, setor: 'Transporte Ambulância' });
     }
     const res6 = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
     expect(res6.body.success).toBe(true);
     const nightWarnings6 = res6.body.warnings.filter((w) => w.type === 'noturno_ambul');
 
     // Cenário B: 1 motorista (linha base para comparação)
-    const dbSolo = freshDb();
-    createEmployee(dbSolo, { name: 'Solo', setor: 'Transporte Ambulância' });
+    await freshDb();
+    await createEmployee(null, { name: 'Solo', setor: 'Transporte Ambulância' });
     const resSolo = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
     const nightWarningsSolo = resSolo.body.warnings.filter((w) => w.type === 'noturno_ambul');
 
@@ -165,8 +161,7 @@ describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
   });
 
   it('com 1 motorista de Ambulância gera warnings noturnos em vários dias', async () => {
-    const db = freshDb();
-    createEmployee(db, { name: 'Solo', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'Solo', setor: 'Transporte Ambulância' });
 
     const res = await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
@@ -181,10 +176,9 @@ describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
     // memória não atualizava shift_type_id (nem is_day_off/shift_name no bloco
     // Ambul diurno). Garante invariante: shift_type_id e shift_name são coerentes
     // em todas as entries de plantão.
-    const db = freshDb();
-    createEmployee(db, { name: 'HemoA', setor: 'Transporte Hemodiálise' });
-    createEmployee(db, { name: 'HemoB', setor: 'Transporte Hemodiálise' });
-    createEmployee(db, { name: 'AmbuA', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'HemoA', setor: 'Transporte Hemodiálise' });
+    await createEmployee(null, { name: 'HemoB', setor: 'Transporte Hemodiálise' });
+    await createEmployee(null, { name: 'AmbuA', setor: 'Transporte Ambulância' });
 
     await request(app).post('/api/schedules/generate').send({ month: 1, year: 2025 });
 
@@ -206,7 +200,6 @@ describe('Regra 5 — cobertura diurna mínima (Regra 16)', () => {
     // Um motorista DIURNO (Ambulância) poderia ser convertido para NOTURNO para cobrir
     // requisito de cobertura noturna, gerando células adjacentes Diurno+Noturno na UI.
     // Fix: guard `prefName && prefName !== SHIFT_NOTURNO_NAME` → skip DIURNO employees.
-    const db = freshDb();
 
     const shiftsRes = await request(app).get('/api/shift-types');
     const diurnoId = shiftsRes.body.find((s) => s.name === 'Diurno')?.id;

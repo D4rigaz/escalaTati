@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getDb, runTransaction } from '../db/database.js';
+import { query, transaction } from '../db/database.js';
 
 const router = Router();
 
@@ -35,34 +35,36 @@ function validateSetores(setores) {
 }
 
 /** Load setores for a single employee. */
-function loadSetores(db, employeeId) {
-  return db
-    .prepare('SELECT setor FROM employee_sectors WHERE employee_id = ? ORDER BY setor')
-    .all(employeeId)
-    .map((r) => r.setor);
+async function loadSetores(employeeId) {
+  const result = await query(
+    'SELECT setor FROM employee_sectors WHERE employee_id = $1 ORDER BY setor',
+    [employeeId]
+  );
+  return result.rows.map((r) => r.setor);
 }
 
 /** Load vacations for a single employee. */
-function loadVacations(db, employeeId) {
-  return db
-    .prepare('SELECT * FROM employee_vacations WHERE employee_id = ? ORDER BY start_date')
-    .all(employeeId);
+async function loadVacations(employeeId) {
+  const result = await query(
+    'SELECT * FROM employee_vacations WHERE employee_id = $1 ORDER BY start_date',
+    [employeeId]
+  );
+  return result.rows;
 }
 
 // ── GET /api/employees ────────────────────────────────────────────────────────
-router.get('/', (req, res) => {
-  const db = getDb();
+router.get('/', async (req, res) => {
   const includeInactive = req.query.includeInactive === 'true';
   const employees = includeInactive
-    ? db.prepare('SELECT * FROM employees ORDER BY name').all()
-    : db.prepare('SELECT * FROM employees WHERE active = 1 ORDER BY name').all();
+    ? (await query('SELECT * FROM employees ORDER BY name')).rows
+    : (await query('SELECT * FROM employees WHERE active = TRUE ORDER BY name')).rows;
 
-  const rules = db.prepare('SELECT * FROM employee_rest_rules').all();
+  const rules = (await query('SELECT * FROM employee_rest_rules')).rows;
   const rulesByEmployee = {};
   for (const rule of rules) rulesByEmployee[rule.employee_id] = rule;
 
   // Load all sectors in one query
-  const allSectors = db.prepare('SELECT employee_id, setor FROM employee_sectors').all();
+  const allSectors = (await query('SELECT employee_id, setor FROM employee_sectors')).rows;
   const sectorsByEmployee = {};
   for (const s of allSectors) {
     if (!sectorsByEmployee[s.employee_id]) sectorsByEmployee[s.employee_id] = [];
@@ -70,9 +72,7 @@ router.get('/', (req, res) => {
   }
 
   // Load all vacations in one query
-  const allVacations = db
-    .prepare('SELECT * FROM employee_vacations ORDER BY start_date')
-    .all();
+  const allVacations = (await query('SELECT * FROM employee_vacations ORDER BY start_date')).rows;
   const vacationsByEmployee = {};
   for (const v of allVacations) {
     if (!vacationsByEmployee[v.employee_id]) vacationsByEmployee[v.employee_id] = [];
@@ -89,23 +89,22 @@ router.get('/', (req, res) => {
 });
 
 // ── GET /api/employees/:id ────────────────────────────────────────────────────
-router.get('/:id', (req, res) => {
-  const db = getDb();
-  const employee = db.prepare('SELECT * FROM employees WHERE id = ?').get(req.params.id);
+router.get('/:id', async (req, res) => {
+  const employee = (await query('SELECT * FROM employees WHERE id = $1', [req.params.id])).rows[0];
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
-  const restRules = db
-    .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
-    .get(req.params.id);
-  const setores = loadSetores(db, employee.id);
-  const vacations = loadVacations(db, employee.id);
+  const restRules = (await query(
+    'SELECT * FROM employee_rest_rules WHERE employee_id = $1',
+    [req.params.id]
+  )).rows[0];
+  const setores = await loadSetores(employee.id);
+  const vacations = await loadVacations(employee.id);
 
   res.json({ ...employee, setores, vacations, restRules: restRules || null });
 });
 
 // ── POST /api/employees ───────────────────────────────────────────────────────
-router.post('/', (req, res) => {
-  const db = getDb();
+router.post('/', async (req, res) => {
   const { name, setores, work_schedule = 'dom_sab', color = '#6B7280', cycle_start_month, cycle_start_year, restRules } = req.body;
   // null ou ausente → usar defaults
   const effectiveCycleStartMonth = cycle_start_month ?? 1;
@@ -134,44 +133,44 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: `cycle_start_year deve ser um inteiro >= ${MIN_CYCLE_START_YEAR}` });
   }
 
-  const employee = runTransaction(() => {
-    const result = db
-      .prepare('INSERT INTO employees (name, cargo, work_schedule, color, cycle_start_month, cycle_start_year) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(name.trim(), 'Motorista', work_schedule, color, csm, csy);
-
-    const employeeId = result.lastInsertRowid;
-
-    for (const setor of setores) {
-      db.prepare('INSERT INTO employee_sectors (employee_id, setor) VALUES (?, ?)').run(employeeId, setor);
-    }
-
-    db.prepare(
-      `INSERT INTO employee_rest_rules (employee_id, min_rest_hours, preferred_shift_id, notes)
-       VALUES (?, ?, ?, ?)`
-    ).run(
-      employeeId,
-      24,
-      restRules?.preferred_shift_id ?? null,
-      restRules?.notes ?? null
+  const employee = await transaction(async (client) => {
+    const result = await client.query(
+      'INSERT INTO employees (name, cargo, work_schedule, color, cycle_start_month, cycle_start_year) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      [name.trim(), 'Motorista', work_schedule, color, csm, csy]
     );
 
-    return db.prepare('SELECT * FROM employees WHERE id = ?').get(employeeId);
+    const employeeId = result.rows[0].id;
+
+    for (const setor of setores) {
+      await client.query(
+        'INSERT INTO employee_sectors (employee_id, setor) VALUES ($1, $2)',
+        [employeeId, setor]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO employee_rest_rules (employee_id, min_rest_hours, preferred_shift_id, notes)
+       VALUES ($1, $2, $3, $4)`,
+      [employeeId, 24, restRules?.preferred_shift_id ?? null, restRules?.notes ?? null]
+    );
+
+    return (await client.query('SELECT * FROM employees WHERE id = $1', [employeeId])).rows[0];
   });
 
-  const rules = db
-    .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
-    .get(employee.id);
-  const empSetores = loadSetores(db, employee.id);
+  const rules = (await query(
+    'SELECT * FROM employee_rest_rules WHERE employee_id = $1',
+    [employee.id]
+  )).rows[0];
+  const empSetores = await loadSetores(employee.id);
   res.status(201).json({ ...employee, setores: empSetores, vacations: [], restRules: rules });
 });
 
 // ── PUT /api/employees/:id ────────────────────────────────────────────────────
-router.put('/:id', (req, res) => {
-  const db = getDb();
+router.put('/:id', async (req, res) => {
   const { name, setores, work_schedule, color, cycle_start_month, cycle_start_year, active, restRules } = req.body;
   const id = parseInt(req.params.id);
 
-  const employee = db.prepare('SELECT id FROM employees WHERE id = ?').get(id);
+  const employee = (await query('SELECT id FROM employees WHERE id = $1', [id])).rows[0];
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
   if (setores !== undefined) {
@@ -201,85 +200,92 @@ router.put('/:id', (req, res) => {
     }
   }
 
-  runTransaction(() => {
+  await transaction(async (client) => {
     if (name !== undefined)
-      db.prepare("UPDATE employees SET name = ?, updated_at = datetime('now') WHERE id = ?").run(name, id);
-    db.prepare("UPDATE employees SET cargo = 'Motorista', updated_at = datetime('now') WHERE id = ?").run(id);
+      await client.query('UPDATE employees SET name = $1, updated_at = NOW() WHERE id = $2', [name, id]);
+    await client.query("UPDATE employees SET cargo = 'Motorista', updated_at = NOW() WHERE id = $1", [id]);
     if (work_schedule !== undefined)
-      db.prepare("UPDATE employees SET work_schedule = ?, updated_at = datetime('now') WHERE id = ?").run(work_schedule, id);
+      await client.query('UPDATE employees SET work_schedule = $1, updated_at = NOW() WHERE id = $2', [work_schedule, id]);
     if (color !== undefined)
-      db.prepare("UPDATE employees SET color = ?, updated_at = datetime('now') WHERE id = ?").run(color, id);
+      await client.query('UPDATE employees SET color = $1, updated_at = NOW() WHERE id = $2', [color, id]);
     if (cycle_start_month !== undefined && cycle_start_month !== null)
-      db.prepare("UPDATE employees SET cycle_start_month = ?, updated_at = datetime('now') WHERE id = ?")
-        .run(Number(cycle_start_month), id);
+      await client.query('UPDATE employees SET cycle_start_month = $1, updated_at = NOW() WHERE id = $2', [Number(cycle_start_month), id]);
     if (cycle_start_year !== undefined && cycle_start_year !== null)
-      db.prepare("UPDATE employees SET cycle_start_year = ?, updated_at = datetime('now') WHERE id = ?")
-        .run(Number(cycle_start_year), id);
+      await client.query('UPDATE employees SET cycle_start_year = $1, updated_at = NOW() WHERE id = $2', [Number(cycle_start_year), id]);
     if (active !== undefined)
-      db.prepare("UPDATE employees SET active = ?, updated_at = datetime('now') WHERE id = ?").run(active ? 1 : 0, id);
+      await client.query('UPDATE employees SET active = $1, updated_at = NOW() WHERE id = $2', [active, id]);
 
     if (setores !== undefined) {
-      db.prepare('DELETE FROM employee_sectors WHERE employee_id = ?').run(id);
+      await client.query('DELETE FROM employee_sectors WHERE employee_id = $1', [id]);
       for (const setor of setores) {
-        db.prepare('INSERT INTO employee_sectors (employee_id, setor) VALUES (?, ?)').run(id, setor);
+        await client.query(
+          'INSERT INTO employee_sectors (employee_id, setor) VALUES ($1, $2)',
+          [id, setor]
+        );
       }
     }
 
     if (restRules) {
-      const existing = db
-        .prepare('SELECT id FROM employee_rest_rules WHERE employee_id = ?')
-        .get(id);
+      const existing = (await client.query(
+        'SELECT id FROM employee_rest_rules WHERE employee_id = $1',
+        [id]
+      )).rows[0];
       if (existing) {
         if (restRules.preferred_shift_id !== undefined)
-          db.prepare('UPDATE employee_rest_rules SET preferred_shift_id = ? WHERE employee_id = ?').run(restRules.preferred_shift_id, id);
+          await client.query(
+            'UPDATE employee_rest_rules SET preferred_shift_id = $1 WHERE employee_id = $2',
+            [restRules.preferred_shift_id, id]
+          );
         if (restRules.notes !== undefined)
-          db.prepare('UPDATE employee_rest_rules SET notes = ? WHERE employee_id = ?').run(restRules.notes, id);
+          await client.query(
+            'UPDATE employee_rest_rules SET notes = $1 WHERE employee_id = $2',
+            [restRules.notes, id]
+          );
       } else {
-        db.prepare(
+        await client.query(
           `INSERT INTO employee_rest_rules (employee_id, min_rest_hours, preferred_shift_id, notes)
-           VALUES (?, ?, ?, ?)`
-        ).run(id, 24, restRules.preferred_shift_id ?? null, restRules.notes ?? null);
+           VALUES ($1, $2, $3, $4)`,
+          [id, 24, restRules.preferred_shift_id ?? null, restRules.notes ?? null]
+        );
       }
     }
   });
 
-  const updated = db.prepare('SELECT * FROM employees WHERE id = ?').get(id);
-  const rules = db
-    .prepare('SELECT * FROM employee_rest_rules WHERE employee_id = ?')
-    .get(id);
-  const empSetores = loadSetores(db, id);
-  const empVacations = loadVacations(db, id);
+  const updated = (await query('SELECT * FROM employees WHERE id = $1', [id])).rows[0];
+  const rules = (await query(
+    'SELECT * FROM employee_rest_rules WHERE employee_id = $1',
+    [id]
+  )).rows[0];
+  const empSetores = await loadSetores(id);
+  const empVacations = await loadVacations(id);
   res.json({ ...updated, setores: empSetores, vacations: empVacations, restRules: rules });
 });
 
 // ── DELETE /api/employees/:id (soft delete) ───────────────────────────────────
-router.delete('/:id', (req, res) => {
-  const db = getDb();
+router.delete('/:id', async (req, res) => {
   const id = parseInt(req.params.id);
-  const employee = db.prepare('SELECT id FROM employees WHERE id = ?').get(id);
+  const employee = (await query('SELECT id FROM employees WHERE id = $1', [id])).rows[0];
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
-  db.prepare("UPDATE employees SET active = 0, updated_at = datetime('now') WHERE id = ?").run(id);
+  await query('UPDATE employees SET active = FALSE, updated_at = NOW() WHERE id = $1', [id]);
   res.json({ success: true });
 });
 
 // ── GET /api/employees/:id/vacations ─────────────────────────────────────────
-router.get('/:id/vacations', (req, res) => {
-  const db = getDb();
+router.get('/:id/vacations', async (req, res) => {
   const id = parseInt(req.params.id);
-  const employee = db.prepare('SELECT id FROM employees WHERE id = ?').get(id);
+  const employee = (await query('SELECT id FROM employees WHERE id = $1', [id])).rows[0];
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
-  res.json(loadVacations(db, id));
+  res.json(await loadVacations(id));
 });
 
 // ── POST /api/employees/:id/vacations ────────────────────────────────────────
-router.post('/:id/vacations', (req, res) => {
-  const db = getDb();
+router.post('/:id/vacations', async (req, res) => {
   const id = parseInt(req.params.id);
   const { start_date, end_date, notes } = req.body;
 
-  const employee = db.prepare('SELECT id FROM employees WHERE id = ?').get(id);
+  const employee = (await query('SELECT id FROM employees WHERE id = $1', [id])).rows[0];
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
   if (!start_date || !end_date) {
@@ -295,37 +301,36 @@ router.post('/:id/vacations', (req, res) => {
     return res.status(400).json({ error: 'end_date deve ser >= start_date' });
   }
 
-  const overlap = db
-    .prepare(
-      'SELECT id FROM employee_vacations WHERE employee_id = ? AND start_date <= ? AND end_date >= ?'
-    )
-    .get(id, end_date, start_date);
+  const overlap = (await query(
+    'SELECT id FROM employee_vacations WHERE employee_id = $1 AND start_date <= $2 AND end_date >= $3',
+    [id, end_date, start_date]
+  )).rows[0];
   if (overlap) {
     return res.status(400).json({ error: `Período de férias conflita com férias existente (ID ${overlap.id})` });
   }
 
-  const result = db
-    .prepare(
-      'INSERT INTO employee_vacations (employee_id, start_date, end_date, notes) VALUES (?, ?, ?, ?)'
-    )
-    .run(id, start_date, end_date, notes ?? null);
+  const result = await query(
+    'INSERT INTO employee_vacations (employee_id, start_date, end_date, notes) VALUES ($1, $2, $3, $4) RETURNING id',
+    [id, start_date, end_date, notes ?? null]
+  );
 
-  const vacation = db
-    .prepare('SELECT * FROM employee_vacations WHERE id = ?')
-    .get(result.lastInsertRowid);
+  const vacation = (await query(
+    'SELECT * FROM employee_vacations WHERE id = $1',
+    [result.rows[0].id]
+  )).rows[0];
   res.status(201).json(vacation);
 });
 
 // ── PUT /api/employees/:id/vacations/:vid ─────────────────────────────────────
-router.put('/:id/vacations/:vid', (req, res) => {
-  const db = getDb();
+router.put('/:id/vacations/:vid', async (req, res) => {
   const id = parseInt(req.params.id);
   const vid = parseInt(req.params.vid);
   const { start_date, end_date, notes } = req.body;
 
-  const vacation = db
-    .prepare('SELECT * FROM employee_vacations WHERE id = ? AND employee_id = ?')
-    .get(vid, id);
+  const vacation = (await query(
+    'SELECT * FROM employee_vacations WHERE id = $1 AND employee_id = $2',
+    [vid, id]
+  )).rows[0];
   if (!vacation) return res.status(404).json({ error: 'Vacation not found' });
 
   const newStart = start_date ?? vacation.start_date;
@@ -341,35 +346,35 @@ router.put('/:id/vacations/:vid', (req, res) => {
     return res.status(400).json({ error: 'end_date deve ser >= start_date' });
   }
 
-  const overlap = db
-    .prepare(
-      'SELECT id FROM employee_vacations WHERE employee_id = ? AND id != ? AND start_date <= ? AND end_date >= ?'
-    )
-    .get(id, vid, newEnd, newStart);
+  const overlap = (await query(
+    'SELECT id FROM employee_vacations WHERE employee_id = $1 AND id != $2 AND start_date <= $3 AND end_date >= $4',
+    [id, vid, newEnd, newStart]
+  )).rows[0];
   if (overlap) {
     return res.status(400).json({ error: `Período de férias conflita com férias existente (ID ${overlap.id})` });
   }
 
-  db.prepare(
-    'UPDATE employee_vacations SET start_date = ?, end_date = ?, notes = ? WHERE id = ?'
-  ).run(newStart, newEnd, notes ?? vacation.notes, vid);
+  await query(
+    'UPDATE employee_vacations SET start_date = $1, end_date = $2, notes = $3 WHERE id = $4',
+    [newStart, newEnd, notes ?? vacation.notes, vid]
+  );
 
-  const updated = db.prepare('SELECT * FROM employee_vacations WHERE id = ?').get(vid);
+  const updated = (await query('SELECT * FROM employee_vacations WHERE id = $1', [vid])).rows[0];
   res.json(updated);
 });
 
 // ── DELETE /api/employees/:id/vacations/:vid ──────────────────────────────────
-router.delete('/:id/vacations/:vid', (req, res) => {
-  const db = getDb();
+router.delete('/:id/vacations/:vid', async (req, res) => {
   const id = parseInt(req.params.id);
   const vid = parseInt(req.params.vid);
 
-  const vacation = db
-    .prepare('SELECT id FROM employee_vacations WHERE id = ? AND employee_id = ?')
-    .get(vid, id);
+  const vacation = (await query(
+    'SELECT id FROM employee_vacations WHERE id = $1 AND employee_id = $2',
+    [vid, id]
+  )).rows[0];
   if (!vacation) return res.status(404).json({ error: 'Vacation not found' });
 
-  db.prepare('DELETE FROM employee_vacations WHERE id = ?').run(vid);
+  await query('DELETE FROM employee_vacations WHERE id = $1', [vid]);
   res.json({ success: true });
 });
 

@@ -1,12 +1,11 @@
 import { Router } from 'express';
-import { getDb } from '../db/database.js';
+import { query } from '../db/database.js';
 
 const router = Router();
 
 // GET /api/shift-types
-router.get('/', (req, res) => {
-  const db = getDb();
-  const shiftTypes = db.prepare('SELECT * FROM shift_types ORDER BY id').all();
+router.get('/', async (req, res) => {
+  const shiftTypes = (await query('SELECT * FROM shift_types ORDER BY id')).rows;
   res.json(shiftTypes);
 });
 

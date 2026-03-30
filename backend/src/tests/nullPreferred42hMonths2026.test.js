@@ -35,27 +35,31 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { query } from '../db/database.js';
 import { freshDb, createEmployee } from './helpers.js';
 import { generateSchedule } from '../services/scheduleGenerator.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function setCycleStart(db, empId, month, year) {
-  db.prepare('UPDATE employees SET cycle_start_month = ?, cycle_start_year = ? WHERE id = ?')
-    .run(month, year, empId);
+async function setCycleStart(empId, month, year) {
+  await query(
+    'UPDATE employees SET cycle_start_month = $1, cycle_start_year = $2 WHERE id = $3',
+    [month, year, empId]
+  );
 }
 
-function getEntries(db, empId) {
-  return db.prepare(
+async function getEntries(empId) {
+  return (await query(
     `SELECT se.employee_id, se.date, se.is_day_off,
             st.duration_hours, st.name as shift_name
      FROM schedule_entries se
      LEFT JOIN shift_types st ON se.shift_type_id = st.id
-     WHERE se.employee_id = ?
-     ORDER BY se.date`
-  ).all(empId);
+     WHERE se.employee_id = $1
+     ORDER BY se.date`,
+    [empId]
+  )).rows;
 }
 
 function weekHours(entries, empId, dateStart, dateEnd) {
@@ -74,13 +78,12 @@ function weekShifts(entries, empId, dateStart, dateEnd) {
 // globalWi=1 → '42h': Jan 11–17
 describe('Fix #150 — Jan/2026 (cycle_start=Jan/2026, globalWi=1=42h)', () => {
   it('semana 1 (Jan 11–17) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Jan', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Jan', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 1, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-01-11', '2026-01-17');
     expect(hours, 'Jan w1 = 42h (Fix #150)').toBe(42);
 
@@ -96,13 +99,12 @@ describe('Fix #150 — Jan/2026 (cycle_start=Jan/2026, globalWi=1=42h)', () => {
 // globalWi=5 → '42h': Fev 8–14
 describe('Fix #150 — Fev/2026 (cycle_start=Jan/2026, globalWi=5=42h)', () => {
   it('semana 1 (Fev 8–14) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Fev', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Fev', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 2, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-02-08', '2026-02-14');
     expect(hours, 'Fev w1 = 42h (Fix #150)').toBe(42);
 
@@ -117,13 +119,12 @@ describe('Fix #150 — Fev/2026 (cycle_start=Jan/2026, globalWi=5=42h)', () => {
 // globalWi=10 → '42h': Mar 15–21
 describe('Fix #150 — Mar/2026 (cycle_start=Jan/2026, globalWi=10=42h)', () => {
   it('semana 2 (Mar 15–21) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Mar', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Mar', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 3, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-03-15', '2026-03-21');
     expect(hours, 'Mar w2 = 42h (Fix #150)').toBe(42);
 
@@ -139,13 +140,12 @@ describe('Fix #150 — Mar/2026 (cycle_start=Jan/2026, globalWi=10=42h)', () => 
 // globalWi=14 → '42h': Abr 12–18
 describe('Fix #150 — Abr/2026 ★ (cycle_start=Jan/2026, globalWi=13/14=42h) — BUG REPORTADO', () => {
   it('w0 (Abr 5–11) → exatamente 42h com 1×6h — não 48h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Abr w0', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Abr w0', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 4, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-04-05', '2026-04-11');
     expect(hours, 'Abr w0 = 42h (Fix #150, não 48h)').toBe(42);
 
@@ -156,13 +156,12 @@ describe('Fix #150 — Abr/2026 ★ (cycle_start=Jan/2026, globalWi=13/14=42h) �
   });
 
   it('w1 (Abr 12–18) → exatamente 42h com 1×6h — não 48h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Abr w1', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Abr w1', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 4, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-04-12', '2026-04-18');
     expect(hours, 'Abr w1 = 42h (Fix #150, não 48h)').toBe(42);
 
@@ -173,13 +172,12 @@ describe('Fix #150 — Abr/2026 ★ (cycle_start=Jan/2026, globalWi=13/14=42h) �
   });
 
   it('w2 (Abr 19–25) → exatamente 36h (semana 36h — sem regressão)', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Abr w2', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Abr w2', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 4, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-04-19', '2026-04-25');
     expect(hours, 'Abr w2 = 36h (semana 36h — sem regressão)').toBe(36);
 
@@ -193,13 +191,12 @@ describe('Fix #150 — Abr/2026 ★ (cycle_start=Jan/2026, globalWi=13/14=42h) �
 // globalWi=17 → '42h': Mai 3–9
 describe('Fix #150 — Mai/2026 (cycle_start=Jan/2026, globalWi=17=42h)', () => {
   it('semana 0 (Mai 3–9) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Mai', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Mai', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 5, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-05-03', '2026-05-09');
     expect(hours, 'Mai w0 = 42h (Fix #150)').toBe(42);
 
@@ -214,13 +211,12 @@ describe('Fix #150 — Mai/2026 (cycle_start=Jan/2026, globalWi=17=42h)', () => 
 // globalWi=23 → '42h': Jun 14–20
 describe('Fix #150 — Jun/2026 ★ (cycle_start=Jan/2026, globalWi=23=42h)', () => {
   it('semana 1 (Jun 14–20) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Jun', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Jun', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 6, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-06-14', '2026-06-20');
     expect(hours, 'Jun w1 = 42h (Fix #150)').toBe(42);
 
@@ -235,13 +231,12 @@ describe('Fix #150 — Jun/2026 ★ (cycle_start=Jan/2026, globalWi=23=42h)', ()
 // globalWi=26 → '42h': Jul 5–11
 describe('Fix #150 — Jul/2026 ★ (cycle_start=Jan/2026, globalWi=26=42h)', () => {
   it('semana 0 (Jul 5–11) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Jul', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Jul', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 7, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-07-05', '2026-07-11');
     expect(hours, 'Jul w0 = 42h (Fix #150)').toBe(42);
 
@@ -256,13 +251,12 @@ describe('Fix #150 — Jul/2026 ★ (cycle_start=Jan/2026, globalWi=26=42h)', ()
 // globalWi=30 → '36h': Ago 2–8
 describe('Fix #150 — Ago/2026 (cycle_start=Jan/2026, globalWi=30=36h) — regressão', () => {
   it('semana 0 (Ago 2–8) → exatamente 36h — sem regressão de 42h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Ago', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Ago', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 8, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-08-02', '2026-08-08');
     expect(hours, 'Ago w0 = 36h (semana 36h — sem regressão)').toBe(36);
 
@@ -277,13 +271,12 @@ describe('Fix #150 — Ago/2026 (cycle_start=Jan/2026, globalWi=30=36h) — regr
 // globalWi=35 → '42h': Set 6–12
 describe('Fix #150 — Set/2026 ★ (cycle_start=Jan/2026, globalWi=35=42h)', () => {
   it('semana 0 (Set 6–12) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Set', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Set', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 9, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-09-06', '2026-09-12');
     expect(hours, 'Set w0 = 42h (Fix #150)').toBe(42);
 
@@ -298,13 +291,12 @@ describe('Fix #150 — Set/2026 ★ (cycle_start=Jan/2026, globalWi=35=42h)', ()
 // globalWi=40 → '42h': Out 11–17
 describe('Fix #150 — Out/2026 (cycle_start=Jan/2026, globalWi=40=42h)', () => {
   it('semana 1 (Out 11–17) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Out', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Out', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 10, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-10-11', '2026-10-17');
     expect(hours, 'Out w1 = 42h (Fix #150)').toBe(42);
 
@@ -319,13 +311,12 @@ describe('Fix #150 — Out/2026 (cycle_start=Jan/2026, globalWi=40=42h)', () => 
 // globalWi=44 → '42h': Nov 8–14
 describe('Fix #150 — Nov/2026 (cycle_start=Jan/2026, globalWi=44=42h)', () => {
   it('semana 1 (Nov 8–14) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Nov', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Nov', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 11, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-11-08', '2026-11-14');
     expect(hours, 'Nov w1 = 42h (Fix #150)').toBe(42);
 
@@ -340,13 +331,12 @@ describe('Fix #150 — Nov/2026 (cycle_start=Jan/2026, globalWi=44=42h)', () => 
 // globalWi=50 → '42h': Dez 20–26
 describe('Fix #150 — Dez/2026 ★ (cycle_start=Jan/2026, globalWi=50=42h)', () => {
   it('semana 2 (Dez 20–26) → exatamente 42h com 1×6h', async () => {
-    const db = freshDb();
-    const emp = createEmployee(db, { name: 'NullPref Dez', preferredShiftId: null });
-    setCycleStart(db, emp.id, 1, 2026);
+    const emp = await createEmployee(null, { name: 'NullPref Dez', preferredShiftId: null });
+    await setCycleStart(emp.id, 1, 2026);
 
     await generateSchedule({ month: 12, year: 2026 });
 
-    const entries = getEntries(db, emp.id);
+    const entries = await getEntries(emp.id);
     const hours = weekHours(entries, emp.id, '2026-12-20', '2026-12-26');
     expect(hours, 'Dez w2 = 42h (Fix #150)').toBe(42);
 

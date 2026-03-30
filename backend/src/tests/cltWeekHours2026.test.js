@@ -45,7 +45,7 @@ import request from 'supertest';
 import app from '../app.js';
 import { freshDb } from './helpers.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 // ── Helpers (mesmo padrão de cltWeekHours.test.js) ───────────────────────────
 

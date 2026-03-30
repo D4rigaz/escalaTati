@@ -16,9 +16,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 import app from '../app.js';
 import { freshDb, createEmployee } from './helpers.js';
-import { getDb } from '../db/database.js';
 
-beforeEach(() => freshDb());
+beforeEach(async () => { await freshDb(); });
 
 describe('GET /api/schedules/generations (issue #50)', () => {
   // ── AC1 ──────────────────────────────────────────────────────────────────────
@@ -93,8 +92,7 @@ describe('GET /api/schedules/generations (issue #50)', () => {
   // campos results (array) e warnings (array).
 
   it('AC4 — params_json retornado como objeto com campos results e warnings', async () => {
-    const db = getDb();
-    createEmployee(db, { name: 'Motorista X', setor: 'Transporte Ambulância' });
+    await createEmployee(null, { name: 'Motorista X', setor: 'Transporte Ambulância' });
 
     await request(app)
       .post('/api/schedules/generate')
