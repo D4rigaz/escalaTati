@@ -11,6 +11,21 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: escalatati
+          POSTGRES_PASSWORD: escalatati
+          POSTGRES_DB: escalatati_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +44,8 @@ jobs:
         run: npm test
         working-directory: backend
         env:
-          DB_PATH: ":memory:"
+          DATABASE_URL: postgresql://escalatati:escalatati@localhost:5432/escalatati_test
+          TEST_DATABASE_URL: postgresql://escalatati:escalatati@localhost:5432/escalatati_test
 
   frontend-tests:
     name: Frontend Tests
