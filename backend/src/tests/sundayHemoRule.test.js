@@ -61,7 +61,7 @@ async function buildSetoresMap() {
 
 // ─── Elencos ──────────────────────────────────────────────────────────────────
 
-/** Cria elenco realístico com pure-Hemo, pure-Ambul e polivalentes */
+/** Cria elenco realístico com pure-Hemo, pure-Ambul (Diurno e Noturno) e polivalentes */
 async function setupFullCrew() {
   for (let i = 1; i <= 4; i++) {
     await request(app).post('/api/employees').send({
@@ -73,14 +73,26 @@ async function setupFullCrew() {
       restRules: { preferred_shift_id: SHIFT_DIURNO_ID },
     }).expect(201);
   }
+  // Amb Noturno — cobrem Noturno dom/sab e dias de semana
   for (let i = 1; i <= 4; i++) {
     await request(app).post('/api/employees').send({
-      name: `Amb ${i}`,
+      name: `Amb Noturno ${i}`,
       setores: [SETOR_AMBUL],
       cycle_start_month: ((i - 1) % 3) + 1,
       cycle_start_year: YEAR,
       work_schedule: 'dom_sab',
       restRules: { preferred_shift_id: SHIFT_NOTURNO_ID },
+    }).expect(201);
+  }
+  // Amb Diurno — garantem ≥1 Ambulância Diurno nos domingos (Diurno naturalmente trabalha Dom)
+  for (let i = 1; i <= 2; i++) {
+    await request(app).post('/api/employees').send({
+      name: `Amb Diurno ${i}`,
+      setores: [SETOR_AMBUL],
+      cycle_start_month: i,
+      cycle_start_year: YEAR,
+      work_schedule: 'dom_sab',
+      restRules: { preferred_shift_id: SHIFT_DIURNO_ID },
     }).expect(201);
   }
   await request(app).post('/api/employees').send({
