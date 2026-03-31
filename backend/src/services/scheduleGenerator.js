@@ -401,6 +401,8 @@ async function generateForEmployee(client, employee, shiftTypes, shiftMap, dates
   const setores = employee.setores || [];
   const isAdm = setores.includes(SETOR_ADM);
   const isSegSex = employee.work_schedule === 'seg_sex';
+  // Issue #162: pure-Hemo workers never work on Sundays
+  const isPureHemo = setores.includes(SETOR_HEMO) && !setores.includes(SETOR_AMBUL);
 
   // Turnos de 6h (Manhã/Tarde) nunca são selecionados automaticamente pelo
   // selectShift no ciclo normal de trabalho — somente via lógica extra-42h (#65).
@@ -446,7 +448,15 @@ async function generateForEmployee(client, employee, shiftTypes, shiftMap, dates
         return dow === 0 || dow === 6;
       }))
     : new Set();
-  const lockedOffDates = new Set([...vacationDatesForEmp, ...segSexForcedOff]);
+  // Issue #162: pure-Hemo workers never work on Sundays — preserve as day_off in correctHours
+  const hemoSundayOff = isPureHemo
+    ? new Set(dates.filter((d) => {
+        if (lockedDates.has(d) || vacationDatesForEmp.has(d)) return false;
+        const dow = new Date(d + 'T12:00:00').getDay();
+        return dow === 0;
+      }))
+    : new Set();
+  const lockedOffDates = new Set([...vacationDatesForEmp, ...segSexForcedOff, ...hemoSundayOff]);
 
   // Count locked hours
   for (const entry of lockedEntries) {
@@ -641,6 +651,12 @@ async function generateForEmployee(client, employee, shiftTypes, shiftMap, dates
             const dow = new Date(d + 'T12:00:00').getDay();
             return dow === 0 || dow === 6;
           })
+        : isPureHemo
+        ? week.filter((d) => {
+            if (lockedDates.has(d) || vacationDatesForEmp.has(d)) return false;
+            const dow = new Date(d + 'T12:00:00').getDay();
+            return dow === 0; // issue #162: pure-Hemo não trabalha domingo
+          })
         : [];
       const freeInWeek = week.filter(
         (d) => !lockedDates.has(d) && !vacationDatesForEmp.has(d) && !forcedOff.includes(d)
@@ -652,7 +668,7 @@ async function generateForEmployee(client, employee, shiftTypes, shiftMap, dates
         consecutiveHours = 0;
         lastShiftName = null;
       }
-      // Add forced off (seg_sex weekends)
+      // Add forced off (seg_sex weekends + pure-Hemo Sundays)
       for (const date of forcedOff) {
         entries.push({ employee_id: employee.id, shift_type_id: null, date, is_day_off: 1, is_locked: 0, notes: null });
         consecutiveHours = 0;
@@ -1392,7 +1408,7 @@ async function enforceDiurnoCoverage(employees, employeeSectorsMap, dates, diurn
 
   for (const date of dates) {
     const dow = new Date(date + 'T12:00:00').getDay();
-    if (dow === 0) continue; // skip Sunday
+    const isSunday = dow === 0; // issue #162: domingo só enforça Ambulância (Hemo não opera)
 
     const { rows: entries } = await query(
       `SELECT se.employee_id, se.id, se.is_day_off, se.is_locked, se.shift_type_id, se.notes,
@@ -1418,16 +1434,16 @@ async function enforceDiurnoCoverage(employees, employeeSectorsMap, dates, diurn
       }
     }
 
-    // Fix Hemo coverage (need ≥2)
-    if (hemoCount < 2) {
+    // Fix Hemo coverage (need ≥2) — domingo: Hemodiálise não opera (issue #162)
+    if (!isSunday && hemoCount < 2) {
       let fixed = 0;
       const needed = 2 - hemoCount;
       for (const emp of employees) {
         if (fixed >= needed) break;
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_HEMO)) continue;
-        // Regra 12: seg_sex nunca trabalha Sábado (dow=6); domingo já é excluído acima.
-        if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
+        // Regra 12: seg_sex nunca trabalha Sábado (dow=6) ou Domingo (dow=0).
+        if (emp.work_schedule === 'seg_sex' && (dow === 6 || dow === 0)) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!await canAssignShift(query, emp.id, date, diurnoShift)) continue;
@@ -1471,8 +1487,8 @@ async function enforceDiurnoCoverage(employees, employeeSectorsMap, dates, diurn
         if (fixed) break;
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_AMBUL)) continue;
-        // Regra 12: seg_sex nunca trabalha Sábado (dow=6); domingo já é excluído acima.
-        if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
+        // Regra 12: seg_sex nunca trabalha Sábado (dow=6) ou Domingo (dow=0).
+        if (emp.work_schedule === 'seg_sex' && (dow === 6 || dow === 0)) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!await canAssignShift(query, emp.id, date, diurnoShift)) continue;
@@ -1581,7 +1597,8 @@ async function enforceNocturnalCoverage(employees, employeeSectorsMap, dates, no
 
   for (const date of dates) {
     const dow = new Date(date + 'T12:00:00').getDay();
-    const required = [2, 4, 6].includes(dow) ? 2 : [1, 3, 5].includes(dow) ? 1 : 0;
+    // Issue #162: domingo tem cobertura mínima de 1 Ambulância Noturno
+    const required = [2, 4, 6].includes(dow) ? 2 : [1, 3, 5].includes(dow) ? 1 : dow === 0 ? 1 : 0;
     if (required === 0) continue;
 
     const { rows: entries } = await query(
@@ -1613,11 +1630,13 @@ async function enforceNocturnalCoverage(employees, employeeSectorsMap, dates, no
         const setores = employeeSectorsMap[emp.id] || [];
         if (!setores.includes(SETOR_AMBUL)) continue;
         // Bug #87: só converte motoristas cujo turno preferido é NOTURNO (ou sem preferência).
-        // Motoristas DIURNO não devem ser forçados a NOTURNO — viola o turno contratado.
+        // Exceção (issue #162): aos domingos, polivalentes (Hemo+Ambul) podem ser forçados ao
+        // turno oposto se necessário para cobrir a cobertura mínima de 1 Ambulância Noturno.
         const prefName = preferredShiftNameByEmp[emp.id];
-        if (prefName && prefName !== SHIFT_NOTURNO_NAME) continue;
-        // Regra 12: seg_sex nunca trabalha Sábado (dow=6); domingo já tem required=0 acima.
-        if (emp.work_schedule === 'seg_sex' && dow === 6) continue;
+        const isPolivalente = (employeeSectorsMap[emp.id] || []).includes(SETOR_HEMO);
+        if (prefName && prefName !== SHIFT_NOTURNO_NAME && !(dow === 0 && isPolivalente)) continue;
+        // Regra 12: seg_sex nunca trabalha Sábado (dow=6) ou Domingo (dow=0).
+        if (emp.work_schedule === 'seg_sex' && (dow === 6 || dow === 0)) continue;
         const entry = entryByEmp[emp.id];
         if (!entry || !entry.is_day_off || entry.is_locked || entry.notes === 'Férias') continue;
         if (!await canAssignShift(query, emp.id, date, noturnoShift)) continue;
