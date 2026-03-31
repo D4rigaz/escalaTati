@@ -74,6 +74,23 @@ async function setupCrew() {
       work_schedule: 'seg_sex',
     }).expect(201);
   }
+  // Issue #162: polivalentes (Hemo+Ambul) garantem cobertura de Ambulância nos domingos
+  await request(app).post('/api/employees').send({
+    name: 'Polivalente Diurno',
+    setores: ['Transporte Hemodiálise', 'Transporte Ambulância'],
+    cycle_start_month: 1,
+    cycle_start_year: YEAR,
+    work_schedule: 'dom_sab',
+    restRules: { preferred_shift_id: SHIFT_DIURNO_ID },
+  }).expect(201);
+  await request(app).post('/api/employees').send({
+    name: 'Polivalente Noturno',
+    setores: ['Transporte Hemodiálise', 'Transporte Ambulância'],
+    cycle_start_month: 2,
+    cycle_start_year: YEAR,
+    work_schedule: 'dom_sab',
+    restRules: { preferred_shift_id: SHIFT_NOTURNO_ID },
+  }).expect(201);
 }
 
 function getPeriodDates(month, year) {
